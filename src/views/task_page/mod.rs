@@ -226,7 +226,7 @@ impl TaskPage {
                 let on = t.stage_id == Some(s.id);
                 let name = s.name.clone();
                 let note = on
-                    .then(|| t.stage_since.as_deref())
+                    .then_some(t.stage_since.as_deref())
                     .flatten()
                     .and_then(|d| date::days_since(d, today))
                     .map(|n| format!("{n}d"));
