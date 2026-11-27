@@ -1,5 +1,5 @@
 use crate::theme::Tone;
-use crate::theme::{FONT, PAGE, TEXT};
+use crate::theme::{BORDER, FONT, PAGE, SIDEBAR, TEXT, TEXT_SOFT};
 use gpui::{
     BoxShadow, Div, FontWeight, SharedString, Svg, black, div, point, prelude::*, px, rgb, svg,
 };
@@ -23,6 +23,23 @@ pub fn tag(text: impl Into<SharedString>, tone: Tone, text_size: f32) -> Div {
         .bg(rgb(tone.bg))
         .text_color(rgb(tone.fg))
         .child(text.into())
+}
+
+pub fn kbd(key: &str) -> Div {
+    div()
+        .px(px(6.))
+        .py(px(1.))
+        .min_w(px(20.))
+        .flex()
+        .justify_center()
+        .rounded(px(4.))
+        .border_1()
+        .border_color(rgb(BORDER))
+        .bg(rgb(SIDEBAR))
+        .text_size(px(11.))
+        .font_weight(FontWeight::MEDIUM)
+        .text_color(rgb(TEXT_SOFT))
+        .child(key.to_string())
 }
 
 pub fn popover() -> Div {

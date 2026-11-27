@@ -10,7 +10,7 @@ macro_rules! icons {
 
 const ICONS: &[(&str, &[u8])] = icons!(
     "logo", "search", "tasks", "clock", "inbox", "sparkle", "status", "user", "calendar", "check",
-    "lock"
+    "lock", "keyboard"
 );
 
 pub struct Assets;

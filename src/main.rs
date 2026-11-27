@@ -9,7 +9,7 @@ mod ui;
 
 use connect::{ConnectView, Connected};
 use gpui::{
-    App, Bounds, BoxShadow, ClickEvent, Context, Div, Entity, FocusHandle, Focusable, FontWeight,
+    Anchor, App, Bounds, ClickEvent, Context, Div, Entity, FocusHandle, Focusable, FontWeight,
     HighlightStyle, KeyDownEvent, MouseButton, MouseDownEvent, ScrollStrategy, SharedString,
     Stateful, StyledText, TitlebarOptions, UniformListScrollHandle, Window, WindowBounds,
     WindowOptions, anchored, deferred, div, point, prelude::*, px, rgb, size, uniform_list, white,
@@ -19,7 +19,7 @@ use odoo::{Login, Odoo, SubTask, Task};
 use serde_json::json;
 use std::{collections::HashMap, ops::Range, sync::Arc};
 use theme::*;
-use ui::{icon, popover, tag};
+use ui::{icon, kbd, popover, tag};
 
 struct Proposal {
     name: String,
@@ -40,6 +40,7 @@ struct BetterOdoo {
     proposed: Vec<Proposal>,
     page: bool,
     people_menu: bool,
+    shortcuts: bool,
     today: i64,
     connect: Option<Entity<ConnectView>>,
     rows_scroll: UniformListScrollHandle,
@@ -66,6 +67,7 @@ impl BetterOdoo {
             proposed: vec![],
             page: false,
             people_menu: false,
+            shortcuts: false,
             today: date::today(),
             connect: None,
             rows_scroll: UniformListScrollHandle::new(),
@@ -312,6 +314,11 @@ impl BetterOdoo {
         }
         let n = self.visible(cx).len();
         let secondary = ev.keystroke.modifiers.secondary(cx);
+        if ev.keystroke.key_char.as_deref() == Some("?") {
+            self.shortcuts = !self.shortcuts;
+            cx.notify();
+            return;
+        }
         match ev.keystroke.key.as_str() {
             "k" if secondary => window.focus(&self.filter.focus_handle(cx), cx),
             "/" => window.focus(&self.filter.focus_handle(cx), cx),
@@ -327,6 +334,7 @@ impl BetterOdoo {
             "enter" if !self.proposed.is_empty() => self.commit_subtasks(cx),
             "enter" if n > 0 => self.page = true,
             "escape" if self.people_menu => self.people_menu = false,
+            "escape" if self.shortcuts => self.shortcuts = false,
             "escape" if !self.proposed.is_empty() => self.proposed.clear(),
             "escape" => self.page = false,
             "0" => self.set_assignee(None),
@@ -569,23 +577,43 @@ impl Render for BetterOdoo {
             );
         }
         let synced = self.odoo.is_some() && self.status.as_ref() == "Synced just now";
-        sidebar = sidebar.child(project_list).child(
-            div()
-                .flex()
-                .items_center()
-                .gap(px(8.))
-                .p(px(10.))
-                .text_size(px(12.))
-                .text_color(rgb(MUTED))
-                .child(
-                    div()
-                        .flex_none()
-                        .size(px(6.))
-                        .rounded_full()
-                        .bg(rgb(if synced { SUCCESS } else { MUTED })),
-                )
-                .child(self.status.clone()),
-        );
+        let was_open = self.shortcuts;
+        sidebar = sidebar
+            .child(project_list)
+            .child(
+                div()
+                    .child(
+                        nav_item("nav-shortcuts", "keyboard", "Shortcuts".into(), was_open)
+                            .child(kbd("?"))
+                            .on_mouse_down(
+                                MouseButton::Left,
+                                cx.listener(move |this, _: &MouseDownEvent, _, cx| {
+                                    this.shortcuts = !was_open;
+                                    cx.notify()
+                                }),
+                            ),
+                    )
+                    .when(was_open, |d| {
+                        d.child(self.shortcuts_popover(people.len(), cx))
+                    }),
+            )
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(px(8.))
+                    .p(px(10.))
+                    .text_size(px(12.))
+                    .text_color(rgb(MUTED))
+                    .child(
+                        div()
+                            .flex_none()
+                            .size(px(6.))
+                            .rounded_full()
+                            .bg(rgb(if synced { SUCCESS } else { MUTED })),
+                    )
+                    .child(self.status.clone()),
+            );
 
         let chip = |id: SharedString, label: String, on: bool| {
             div()
@@ -690,18 +718,6 @@ impl Render for BetterOdoo {
                     .map(|(l, w)| div().flex_none().w(px(w)).child(*l)),
             );
 
-        let key = |k: String, label: &str| {
-            div()
-                .flex()
-                .gap(px(4.))
-                .child(
-                    div()
-                        .font_weight(FontWeight::SEMIBOLD)
-                        .text_color(rgb(TEXT))
-                        .child(k),
-                )
-                .child(label.to_string())
-        };
         let main = div()
             .flex()
             .flex_col()
@@ -748,21 +764,6 @@ impl Render for BetterOdoo {
                         .track_scroll(&self.rows_scroll)
                         .flex_1(),
                     ),
-            )
-            .child(
-                div()
-                    .flex()
-                    .flex_wrap()
-                    .gap(px(18.))
-                    .text_size(px(12.))
-                    .text_color(rgb(MUTED))
-                    .child(key("j k".into(), "move"))
-                    .child(key("↵".into(), "open"))
-                    .child(key(
-                        format!("1–{}", people.len().clamp(1, TOP_PEOPLE)),
-                        "assignee",
-                    ))
-                    .child(key("s".into(), "AI sub-tasks")),
             );
 
         let selected = visible.get(self.selected).filter(|_| self.page);
@@ -790,6 +791,62 @@ impl Render for BetterOdoo {
 }
 
 impl BetterOdoo {
+    fn shortcuts_popover(&self, people: usize, cx: &mut Context<Self>) -> impl IntoElement {
+        let filter = if cfg!(target_os = "macos") {
+            "/  ⌘K"
+        } else {
+            "/  Ctrl K"
+        };
+        let people = format!("1–{}", people.clamp(1, TOP_PEOPLE));
+        let rows = [
+            ("j  k", "Move between tasks"),
+            ("↵", "Open task"),
+            ("Esc", "Back to list"),
+            (people.as_str(), "Filter by person"),
+            ("0", "Everyone"),
+            (filter, "Filter tasks"),
+            ("s", "Suggest sub-tasks with AI"),
+            ("?", "Show shortcuts"),
+        ];
+        deferred(
+            anchored()
+                .anchor(Anchor::BottomLeft)
+                .snap_to_window()
+                .offset(point(px(0.), px(-38.)))
+                .child(
+                    popover()
+                        .id("shortcuts")
+                        .occlude()
+                        .w(px(300.))
+                        .p(px(14.))
+                        .flex()
+                        .flex_col()
+                        .gap(px(10.))
+                        .on_mouse_down_out(cx.listener(|this, _: &MouseDownEvent, _, cx| {
+                            this.shortcuts = false;
+                            cx.notify()
+                        }))
+                        .child(
+                            div()
+                                .text_size(px(12.))
+                                .font_weight(FontWeight::MEDIUM)
+                                .text_color(rgb(MUTED))
+                                .child("Keyboard shortcuts"),
+                        )
+                        .children(rows.into_iter().map(|(k, label)| {
+                            div()
+                                .flex()
+                                .items_center()
+                                .justify_between()
+                                .text_size(px(13.))
+                                .child(label)
+                                .child(div().flex().gap(px(4.)).children(k.split("  ").map(kbd)))
+                        })),
+                ),
+        )
+        .with_priority(1)
+    }
+
     fn people_menu(&self, rest: &[String], cx: &mut Context<Self>) -> impl IntoElement {
         let counts: HashMap<&String, usize> = rest
             .iter()
