@@ -25,7 +25,9 @@ actions!(
         Cut,
         Copy,
         Submit,
-        Cancel
+        Cancel,
+        FocusNext,
+        FocusPrev
     ]
 );
 
@@ -73,6 +75,8 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new("end", End, ctx),
         KeyBinding::new("enter", Submit, ctx),
         KeyBinding::new("escape", Cancel, ctx),
+        KeyBinding::new("tab", FocusNext, ctx),
+        KeyBinding::new("shift-tab", FocusPrev, ctx),
     ]);
 }
 
@@ -106,7 +110,7 @@ impl Focusable for TextInput {
 impl TextInput {
     pub fn new(placeholder: impl Into<SharedString>, cx: &mut Context<Self>) -> Self {
         Self {
-            focus_handle: cx.focus_handle(),
+            focus_handle: cx.focus_handle().tab_stop(true),
             content: "".into(),
             placeholder: placeholder.into(),
             selected_range: 0..0,
@@ -218,6 +222,14 @@ impl TextInput {
 
     fn cancel(&mut self, _: &Cancel, _: &mut Window, cx: &mut Context<Self>) {
         cx.emit(InputEvent::Cancel);
+    }
+
+    fn focus_next(&mut self, _: &FocusNext, window: &mut Window, cx: &mut Context<Self>) {
+        window.focus_next(cx);
+    }
+
+    fn focus_prev(&mut self, _: &FocusPrev, window: &mut Window, cx: &mut Context<Self>) {
+        window.focus_prev(cx);
     }
 
     fn on_mouse_down(&mut self, ev: &MouseDownEvent, window: &mut Window, cx: &mut Context<Self>) {
@@ -694,6 +706,8 @@ impl Render for TextInput {
             .on_action(cx.listener(Self::copy))
             .on_action(cx.listener(Self::submit))
             .on_action(cx.listener(Self::cancel))
+            .on_action(cx.listener(Self::focus_next))
+            .on_action(cx.listener(Self::focus_prev))
             .on_mouse_down(MouseButton::Left, cx.listener(Self::on_mouse_down))
             .on_mouse_up(MouseButton::Left, cx.listener(Self::on_mouse_up))
             .on_mouse_up_out(MouseButton::Left, cx.listener(Self::on_mouse_up))
