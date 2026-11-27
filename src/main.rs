@@ -54,6 +54,7 @@ struct BetterOdoo {
     people_menu: bool,
     shortcuts: bool,
     settings: Option<Entity<SettingsView>>,
+    expanded: HashSet<i64>,
     stage_filter: HashSet<String>,
     stage_menu: bool,
     people_header_menu: bool,
@@ -88,6 +89,7 @@ impl BetterOdoo {
             people_menu: false,
             shortcuts: false,
             settings: None,
+            expanded: HashSet::new(),
             stage_filter: HashSet::new(),
             stage_menu: false,
             people_header_menu: false,
@@ -210,23 +212,31 @@ impl BetterOdoo {
         cx.notify();
     }
 
+    fn matches(&self, t: &Task, q: &str) -> bool {
+        self.assignee
+            .as_ref()
+            .is_none_or(|a| t.assignees.contains(a))
+            && self.project.as_ref().is_none_or(|p| &t.project == p)
+            && (self.stage_filter.is_empty() || self.stage_filter.contains(&t.stage))
+            && (q.is_empty()
+                || t.name.to_lowercase().contains(q)
+                || t.project.to_lowercase().contains(q))
+    }
+
     fn visible(&self, cx: &App) -> Vec<&Task> {
         let q = self.filter.read(cx).text().to_lowercase();
-        self.tasks
+        self.tasks.iter().filter(|t| self.matches(t, &q)).collect()
+    }
+
+    fn rows(&self, cx: &App) -> Vec<tree::Row> {
+        let q = self.filter.read(cx).text().to_lowercase();
+        let nodes: Vec<(i64, Option<i64>)> = self
+            .tasks
             .iter()
-            .filter(|t| {
-                self.assignee
-                    .as_ref()
-                    .is_none_or(|a| t.assignees.contains(a))
-            })
-            .filter(|t| self.project.as_ref().is_none_or(|p| &t.project == p))
-            .filter(|t| self.stage_filter.is_empty() || self.stage_filter.contains(&t.stage))
-            .filter(|t| {
-                q.is_empty()
-                    || t.name.to_lowercase().contains(&q)
-                    || t.project.to_lowercase().contains(&q)
-            })
-            .collect()
+            .map(|t| (t.id, t.parent.as_ref().map(|p| p.0)))
+            .collect();
+        let own: Vec<bool> = self.tasks.iter().map(|t| self.matches(t, &q)).collect();
+        tree::rows(&nodes, &own, &self.expanded)
     }
 
     fn people(&self) -> Vec<String> {
@@ -247,7 +257,8 @@ impl BetterOdoo {
     }
 
     fn selected_task(&self, cx: &App) -> Option<Task> {
-        self.visible(cx).get(self.selected).map(|t| (*t).clone())
+        let row = self.rows(cx).into_iter().nth(self.selected)?;
+        self.tasks.get(row.idx).cloned()
     }
 
     fn open_composer(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -414,7 +425,8 @@ impl BetterOdoo {
             }
             return;
         }
-        let n = self.visible(cx).len();
+        let rows = self.rows(cx);
+        let n = rows.len();
         let secondary = ev.keystroke.modifiers.secondary(cx);
         if ev.keystroke.key_char.as_deref() == Some("?") {
             self.shortcuts = !self.shortcuts;
@@ -431,6 +443,20 @@ impl BetterOdoo {
             "k" | "up" => {
                 self.selected = self.selected.saturating_sub(1);
                 self.reset_ai();
+            }
+            "right" | "left" => {
+                let Some(row) = rows.get(self.selected) else {
+                    return;
+                };
+                let id = self.tasks[row.idx].id;
+                if row.forced || row.kids == 0 {
+                    return;
+                }
+                if ev.keystroke.key == "right" {
+                    self.expanded.insert(id);
+                } else {
+                    self.expanded.remove(&id);
+                }
             }
             "a" => self.open_composer(window, cx),
             "enter" if !self.proposed.is_empty() => self.commit_work(cx),
@@ -601,17 +627,23 @@ impl Render for BetterOdoo {
                 .into_any_element();
         }
         let visible: Vec<Task> = self.visible(cx).into_iter().cloned().collect();
+        let rows = self.rows(cx);
         let people = self.people();
         let projects = self.projects();
         let overdue = visible
             .iter()
             .filter(|t| !t.done && date::due(t.deadline.as_deref(), self.today).overdue)
             .count();
-        let mut summary = format!(
-            "{} task{}",
-            visible.len(),
-            if visible.len() == 1 { "" } else { "s" }
-        );
+        let known: HashSet<i64> = self.tasks.iter().map(|t| t.id).collect();
+        let subs = visible
+            .iter()
+            .filter(|t| t.parent.as_ref().is_some_and(|p| known.contains(&p.0)))
+            .count();
+        let roots = visible.len() - subs;
+        let mut summary = format!("{roots} task{}", if roots == 1 { "" } else { "s" });
+        if subs > 0 {
+            summary += &format!(" · {subs} sub-task{}", if subs == 1 { "" } else { "s" });
+        }
         if self.project.is_none() {
             let spread = visible
                 .iter()
@@ -1010,7 +1042,7 @@ impl Render for BetterOdoo {
                     .child(
                         uniform_list(
                             "rows",
-                            visible.len(),
+                            rows.len(),
                             cx.processor(|this, range: Range<usize>, _, cx| {
                                 this.render_rows(range, cx)
                             }),
@@ -1020,13 +1052,16 @@ impl Render for BetterOdoo {
                     ),
             );
 
-        let selected = visible.get(self.selected).filter(|_| self.page);
-        if let Some(id) = selected.map(|t| t.id) {
+        let selected: Option<Task> = rows
+            .get(self.selected)
+            .filter(|_| self.page)
+            .map(|r| self.tasks[r.idx].clone());
+        if let Some(id) = selected.as_ref().map(|t| t.id) {
             self.ensure_subtasks(id, cx);
         }
         let content = match (&self.settings, selected) {
             (Some(view), _) => view.clone().into_any_element(),
-            (None, Some(t)) => self.detail(t, window, cx).into_any_element(),
+            (None, Some(t)) => self.detail(&t, window, cx).into_any_element(),
             (None, None) => main.into_any_element(),
         };
 
@@ -1099,6 +1134,7 @@ impl BetterOdoo {
         let rows = [
             ("j  k", "Move between tasks"),
             ("↵", "Open task"),
+            ("←  →", "Collapse or expand sub-tasks"),
             ("Esc", "Back to list"),
             (people.as_str(), "Filter by person"),
             ("0", "Everyone"),
@@ -1281,15 +1317,17 @@ impl BetterOdoo {
     }
 
     fn render_rows(&mut self, range: Range<usize>, cx: &mut Context<Self>) -> Vec<Stateful<Div>> {
-        let visible: Vec<Task> = self.visible(cx).into_iter().cloned().collect();
+        let rows = self.rows(cx);
         let people = self.people();
         let tone_of =
             |name: &str| PEOPLE[people.iter().position(|p| p == name).unwrap_or(0) % PEOPLE.len()];
-        let range = range.start.min(visible.len())..range.end.min(visible.len());
-        visible[range.clone()]
+        let range = range.start.min(rows.len())..range.end.min(rows.len());
+        rows[range.clone()]
             .iter()
             .zip(range)
-            .map(|(t, i)| {
+            .map(|(row, i)| {
+                let t = &self.tasks[row.idx];
+                let id = t.id;
                 let on = i == self.selected;
                 let mut due = date::due(t.deadline.as_deref(), self.today);
                 due.overdue &= !t.done;
@@ -1321,15 +1359,67 @@ impl BetterOdoo {
                             .overflow_hidden()
                             .flex()
                             .items_center()
-                            .gap(px(8.))
+                            .gap(px(4.))
+                            .pl(px(row.depth as f32 * 22.))
+                            .child(
+                                div()
+                                    .id(("fold", i))
+                                    .flex_none()
+                                    .size(px(20.))
+                                    .rounded(px(4.))
+                                    .flex()
+                                    .items_center()
+                                    .justify_center()
+                                    .when(row.kids > 0 && !row.forced, |d| {
+                                        d.cursor_pointer()
+                                            .hover(|s| s.bg(rgb(BORDER)))
+                                            .on_mouse_down(
+                                                MouseButton::Left,
+                                                cx.listener(
+                                                    move |this, _: &MouseDownEvent, _, cx| {
+                                                        if !this.expanded.remove(&id) {
+                                                            this.expanded.insert(id);
+                                                        }
+                                                        cx.stop_propagation();
+                                                        cx.notify()
+                                                    },
+                                                ),
+                                            )
+                                    })
+                                    .when(row.kids > 0, |d| {
+                                        d.child(icon(
+                                            if row.open {
+                                                "chevron-down"
+                                            } else {
+                                                "chevron-right"
+                                            },
+                                            14.,
+                                            MUTED,
+                                        ))
+                                    }),
+                            )
                             .child(
                                 div()
                                     .min_w_0()
                                     .truncate()
-                                    .font_weight(FontWeight::MEDIUM)
-                                    .when(t.done, |d| d.text_color(rgb(MUTED)))
+                                    .font_weight(if row.depth == 0 {
+                                        FontWeight::MEDIUM
+                                    } else {
+                                        FontWeight::NORMAL
+                                    })
+                                    .when(t.done || row.forced, |d| d.text_color(rgb(MUTED)))
                                     .child(t.name.clone()),
                             )
+                            .when(row.kids > 0, |d| {
+                                d.child(
+                                    div()
+                                        .flex_none()
+                                        .ml(px(4.))
+                                        .text_size(px(12.))
+                                        .text_color(rgb(MUTED))
+                                        .child(row.kids.to_string()),
+                                )
+                            })
                             .when(t.priority_high, |d| {
                                 d.child(tag("High", ORANGE, 11.).px(px(6.)).py(px(1.)))
                             }),
@@ -1441,7 +1531,15 @@ impl BetterOdoo {
                                     cx.notify()
                                 })),
                         )
-                        .child(format!("/ {} / #{}", t.project, t.id)),
+                        .child(format!(
+                            "/ {} / {}#{}",
+                            t.project,
+                            t.parent
+                                .as_ref()
+                                .map(|p| format!("{} / ", p.1))
+                                .unwrap_or_default(),
+                            t.id
+                        )),
                 )
                 .child(
                     div()
