@@ -211,12 +211,19 @@ impl Odoo {
     }
 
     pub fn tasks(&self, domain: Value) -> Result<Vec<Task>> {
-        let rows = self.call("project.task", "search_read", json!({
-            "domain": domain,
-            "fields": ["name", "project_id", "stage_id", "user_ids", "date_deadline", "priority", "effective_hours"],
-            "limit": 200,
-            "order": "priority desc, date_deadline asc",
-        }))?;
+        let query = |domain: &Value| {
+            self.call("project.task", "search_read", json!({
+                "domain": domain,
+                "fields": ["name", "project_id", "stage_id", "user_ids", "date_deadline", "priority", "effective_hours"],
+                "limit": 200,
+                "order": "priority desc, date_deadline asc",
+            }))
+        };
+        let mut open = domain.clone();
+        if let Some(terms) = open.as_array_mut() {
+            terms.push(json!(["state", "not in", ["1_done", "1_canceled"]]));
+        }
+        let rows = query(&open).or_else(|_| query(&domain))?;
         let ids: Vec<i64> = rows
             .as_array()
             .into_iter()
