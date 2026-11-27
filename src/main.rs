@@ -12,15 +12,14 @@ use gpui::{
     App, Bounds, BoxShadow, ClickEvent, Context, Div, Entity, FocusHandle, Focusable, FontWeight,
     HighlightStyle, KeyDownEvent, MouseButton, MouseDownEvent, ScrollStrategy, SharedString,
     Stateful, StyledText, TitlebarOptions, UniformListScrollHandle, Window, WindowBounds,
-    WindowOptions, anchored, black, deferred, div, point, prelude::*, px, rgb, size, uniform_list,
-    white,
+    WindowOptions, anchored, deferred, div, point, prelude::*, px, rgb, size, uniform_list, white,
 };
 use input::{InputEvent, TextInput};
 use odoo::{Login, Odoo, SubTask, Task};
 use serde_json::json;
 use std::{collections::HashMap, ops::Range, sync::Arc};
 use theme::*;
-use ui::{icon, tag};
+use ui::{icon, popover, tag};
 
 struct Proposal {
     name: String,
@@ -857,41 +856,13 @@ impl BetterOdoo {
                 .snap_to_window()
                 .offset(point(px(0.), px(6.)))
                 .child(
-                    div()
+                    popover()
                         .id("people-menu")
                         .occlude()
                         .w(px(280.))
                         .max_h(px(340.))
                         .overflow_y_scroll()
                         .p(px(6.))
-                        .rounded(px(8.))
-                        .bg(rgb(PAGE))
-                        .text_size(px(14.))
-                        .text_color(rgb(TEXT))
-                        .font_family(FONT)
-                        .shadow(vec![
-                            BoxShadow {
-                                color: black().opacity(0.05),
-                                offset: point(px(0.), px(0.)),
-                                blur_radius: px(0.),
-                                spread_radius: px(1.),
-                                inset: false,
-                            },
-                            BoxShadow {
-                                color: black().opacity(0.1),
-                                offset: point(px(0.), px(3.)),
-                                blur_radius: px(6.),
-                                spread_radius: px(0.),
-                                inset: false,
-                            },
-                            BoxShadow {
-                                color: black().opacity(0.2),
-                                offset: point(px(0.), px(9.)),
-                                blur_radius: px(24.),
-                                spread_radius: px(0.),
-                                inset: false,
-                            },
-                        ])
                         .on_mouse_down_out(cx.listener(|this, _: &MouseDownEvent, _, cx| {
                             this.people_menu = false;
                             cx.notify()
