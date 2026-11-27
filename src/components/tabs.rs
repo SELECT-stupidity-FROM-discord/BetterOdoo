@@ -134,7 +134,7 @@ fn arrow(color: u32) -> impl IntoElement {
 
 impl RenderOnce for Segmented {
     fn render(self, _: &mut Window, _: &mut App) -> impl IntoElement {
-        div()
+        let strip = div()
             .flex()
             .flex_wrap()
             .items_stretch()
@@ -179,6 +179,7 @@ impl RenderOnce for Segmented {
                     .items_stretch()
                     .child(step)
                     .when(t.active, |d| d.child(arrow(ACTIVE_STEP)))
-            }))
+            }));
+        div().flex().child(strip)
     }
 }
