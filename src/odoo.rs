@@ -7,6 +7,7 @@ pub struct Odoo {
     agent: ureq::Agent,
     cookie: Option<String>,
     bearer: Option<(String, String)>,
+    uid: i64,
 }
 
 #[derive(Clone, Debug)]
@@ -18,6 +19,7 @@ pub struct Task {
     pub assignees: Vec<String>,
     pub deadline: Option<String>,
     pub priority_high: bool,
+    pub logged_hours: f64,
 }
 
 impl Odoo {
@@ -29,6 +31,7 @@ impl Odoo {
             agent: ureq::Agent::new_with_defaults(),
             cookie: None,
             bearer: None,
+            uid: 0,
         };
         if let Ok(key) = var("ODOO_API_KEY") {
             me.bearer = Some((key, db));
@@ -39,16 +42,28 @@ impl Odoo {
                 "/web/session/authenticate",
                 json!({"db": db, "login": env("ODOO_LOGIN")?, "password": env("ODOO_PASSWORD")?}),
             )?;
-            if res["uid"].as_i64().is_none() {
-                return Err(anyhow!(
-                    "password login failed. SSO or 2FA account? Use ODOO_SESSION instead"
-                ));
-            }
+            me.uid = res["uid"].as_i64().ok_or_else(|| {
+                anyhow!("password login failed. SSO or 2FA account? Use ODOO_SESSION instead")
+            })?;
             return Ok(me);
         }
-        me.call("res.users", "context_get", json!({}))
+        let ctx = me
+            .call("res.users", "context_get", json!({}))
             .map_err(|e| anyhow!("sign-in rejected (expired cookie or bad key?): {e}"))?;
+        me.uid = ctx["uid"].as_i64().unwrap_or(0);
         Ok(me)
+    }
+
+    pub fn workspace(&self) -> String {
+        let host = self.url.split("://").last().unwrap_or(&self.url);
+        host.split(['.', ':', '/']).next().unwrap_or(host).into()
+    }
+
+    pub fn version(&self) -> Result<String> {
+        let info = self.rpc("/web/webclient/version_info", json!({}))?;
+        let serie = info["server_serie"].as_str().unwrap_or("?");
+        let serie = serie.rsplit('~').next().unwrap_or(serie);
+        Ok(format!("Odoo {}", serie.trim_end_matches(".0")))
     }
 
     fn rpc(&self, path: &str, params: Value) -> Result<Value> {
@@ -91,7 +106,7 @@ impl Odoo {
     pub fn tasks(&self, domain: Value) -> Result<Vec<Task>> {
         let rows = self.call("project.task", "search_read", json!({
             "domain": domain,
-            "fields": ["name", "project_id", "stage_id", "user_ids", "date_deadline", "priority"],
+            "fields": ["name", "project_id", "stage_id", "user_ids", "date_deadline", "priority", "effective_hours"],
             "limit": 200,
             "order": "priority desc, date_deadline asc",
         }))?;
@@ -104,6 +119,9 @@ impl Odoo {
             .collect();
         let users = self.call("res.users", "read", json!({"ids": ids, "fields": ["name"]}))?;
         let name_of = |id: i64| {
+            if id == self.uid {
+                return "Me".to_string();
+            }
             users
                 .as_array()
                 .into_iter()
@@ -131,6 +149,7 @@ impl Odoo {
                     .collect(),
                 deadline: r["date_deadline"].as_str().map(Into::into),
                 priority_high: r["priority"] == "1",
+                logged_hours: r["effective_hours"].as_f64().unwrap_or(0.),
             })
             .collect())
     }
