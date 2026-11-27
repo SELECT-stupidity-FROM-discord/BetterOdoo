@@ -385,7 +385,7 @@ fn nav_item(
         .child(div().flex_1().child(label))
 }
 
-const COLS: [f32; 4] = [120., 92., 130., 96.];
+const COLS: [f32; 4] = [170., 92., 170., 110.];
 
 impl Render for BetterOdoo {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
@@ -759,6 +759,7 @@ impl BetterOdoo {
                 let due = date::due(t.deadline.as_deref(), self.today);
                 div()
                     .id(("row", i))
+                    .w_full()
                     .flex()
                     .items_center()
                     .gap(px(12.))
@@ -780,6 +781,7 @@ impl BetterOdoo {
                         div()
                             .flex_1()
                             .min_w(px(160.))
+                            .overflow_hidden()
                             .flex()
                             .items_center()
                             .gap(px(8.))
@@ -794,11 +796,19 @@ impl BetterOdoo {
                                 d.child(tag("High", ORANGE, 11.).px(px(6.)).py(px(1.)))
                             }),
                     )
-                    .child(div().flex_none().flex().w(px(COLS[0])).child(tag(
-                        t.stage.clone(),
-                        stage_tone(&t.stage),
-                        12.,
-                    )))
+                    .child(
+                        div()
+                            .flex_none()
+                            .flex()
+                            .w(px(COLS[0]))
+                            .overflow_hidden()
+                            .child(
+                                tag(t.stage.clone(), stage_tone(&t.stage), 12.)
+                                    .flex_shrink_1()
+                                    .min_w_0()
+                                    .truncate(),
+                            ),
+                    )
                     .child(div().flex_none().w(px(COLS[1])).flex().children(
                         t.assignees.iter().enumerate().map(|(j, p)| {
                             let tone = tone_of(p);
