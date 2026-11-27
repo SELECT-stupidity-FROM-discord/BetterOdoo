@@ -134,16 +134,8 @@ fn arrow(color: u32) -> impl IntoElement {
 
 impl RenderOnce for Segmented {
     fn render(self, _: &mut Window, _: &mut App) -> impl IntoElement {
-        let strip = div()
-            .flex()
-            .flex_wrap()
-            .items_stretch()
-            .p(px(3.))
-            .rounded(px(9.))
-            .border_1()
-            .border_color(rgb(BORDER))
-            .bg(rgb(PAGE))
-            .children(self.items.into_iter().enumerate().map(|(i, t)| {
+        let strip = div().flex().flex_wrap().items_stretch().children(
+            self.items.into_iter().enumerate().map(|(i, t)| {
                 let step = div()
                     .id(("segment", i))
                     .flex()
@@ -179,7 +171,8 @@ impl RenderOnce for Segmented {
                     .items_stretch()
                     .child(step)
                     .when(t.active, |d| d.child(arrow(ACTIVE_STEP)))
-            }));
+            }),
+        );
         div().flex().child(strip)
     }
 }
