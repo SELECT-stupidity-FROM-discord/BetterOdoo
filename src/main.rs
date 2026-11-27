@@ -454,6 +454,7 @@ impl Render for BetterOdoo {
                     .pb(px(14.))
                     .child(
                         div()
+                            .flex_none()
                             .size(px(22.))
                             .rounded(px(5.))
                             .bg(rgb(TEXT))
@@ -726,7 +727,6 @@ impl Render for BetterOdoo {
             .h_full()
             .pt(px(40.))
             .px(px(48.))
-            .pb(px(20.))
             .gap(px(18.))
             .child(
                 div()
