@@ -1,15 +1,24 @@
 use crate::date;
 use crate::odoo::WorkItem;
+use crate::settings;
 use anyhow::{Result, anyhow};
 use serde_json::{Value, json};
 use std::env::var;
 
+pub const DEFAULT_MODEL: &str = "qwen2.5:7b";
+
 pub fn model() -> String {
-    var("AI_MODEL").unwrap_or("qwen2.5:7b".into())
+    settings::model()
+        .or_else(|| var("AI_MODEL").ok())
+        .unwrap_or(DEFAULT_MODEL.into())
+}
+
+pub fn base() -> String {
+    var("AI_BASE_URL").unwrap_or("http://localhost:11434/v1".into())
 }
 
 fn chat(system: &str, user: &str) -> Result<Value> {
-    let base = var("AI_BASE_URL").unwrap_or("http://localhost:11434/v1".into());
+    let base = base();
     let model = model();
     let mut req = ureq::post(format!("{base}/chat/completions"));
     if let Ok(k) = var("AI_API_KEY") {
