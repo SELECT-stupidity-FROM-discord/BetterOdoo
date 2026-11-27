@@ -425,7 +425,8 @@ impl Render for ConnectView {
             .overflow_y_scroll()
             .bg(rgb(SIDEBAR))
             .flex()
-            .justify_center()
+            .flex_col()
+            .items_center()
             .px(px(24.))
             .child(
                 div()
