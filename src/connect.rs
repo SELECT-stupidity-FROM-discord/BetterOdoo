@@ -1,7 +1,7 @@
+use crate::components::{icon, tag};
 use crate::input::{InputEvent, TextInput};
 use crate::odoo::{Auth, Login, Odoo, Probe};
 use crate::theme::*;
-use crate::ui::{icon, tag};
 use gpui::{
     BoxShadow, ClickEvent, Context, Div, Entity, EventEmitter, Focusable, FontWeight,
     HighlightStyle, SharedString, Stateful, StyledText, Window, div, point, prelude::*, px, rgb,

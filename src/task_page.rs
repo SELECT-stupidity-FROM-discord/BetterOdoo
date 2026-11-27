@@ -1,7 +1,7 @@
+use crate::components::{icon, kbd, tag};
 use crate::input::{InputEvent, TextInput};
 use crate::odoo::{Stage, Task, Timesheet, WorkItem};
 use crate::theme::*;
-use crate::ui::{icon, kbd, tag};
 use crate::{BetterOdoo, ai, date, hours, stage_tone};
 use gpui::{
     ClickEvent, Context, Div, Entity, Focusable, FontWeight, SharedString, Stateful, Window, div,

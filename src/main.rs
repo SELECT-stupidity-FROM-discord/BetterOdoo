@@ -1,5 +1,6 @@
 mod ai;
 mod assets;
+mod components;
 mod connect;
 mod date;
 mod input;
@@ -10,8 +11,8 @@ mod settings_view;
 mod task_page;
 mod theme;
 mod tree;
-mod ui;
 
+use components::{icon, kbd, popover, tag};
 use connect::{ConnectView, Connected};
 use gpui::{
     Anchor, App, Bounds, ClickEvent, Context, Div, Entity, FocusHandle, Focusable, FontWeight,
@@ -30,7 +31,6 @@ use std::{
 };
 use task_page::{Detail, Draft, Tab};
 use theme::*;
-use ui::{icon, kbd, popover, tag};
 
 struct BetterOdoo {
     focus: FocusHandle,

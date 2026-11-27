@@ -1,8 +1,8 @@
+use crate::components::{icon, tag};
 use crate::input::{InputEvent, TextInput};
 use crate::ollama::{self, Model};
 use crate::settings;
 use crate::theme::*;
-use crate::ui::{icon, tag};
 use gpui::{
     ClickEvent, Context, Div, Entity, EventEmitter, FontWeight, SharedString, Stateful, Window,
     div, prelude::*, px, rgb, white,
