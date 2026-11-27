@@ -14,11 +14,20 @@ pub struct Task {
     pub id: i64,
     pub name: String,
     pub project: String,
+    pub project_id: Option<i64>,
     pub stage: String,
     pub assignees: Vec<String>,
     pub deadline: Option<String>,
     pub priority_high: bool,
     pub logged_hours: f64,
+    pub done: bool,
+}
+
+#[derive(Clone, Debug)]
+pub struct WorkItem {
+    pub name: String,
+    pub hours: f64,
+    pub date: String,
     pub done: bool,
 }
 
@@ -294,6 +303,7 @@ impl Odoo {
                 id: r["id"].as_i64().unwrap_or(0),
                 name: r["name"].as_str().unwrap_or("").into(),
                 project: m2o(&r["project_id"]),
+                project_id: r["project_id"].get(0).and_then(|v| v.as_i64()),
                 stage: m2o(&r["stage_id"]),
                 assignees: r["user_ids"]
                     .as_array()
@@ -332,6 +342,48 @@ impl Odoo {
                 done: matches!(r["state"].as_str(), Some("1_done" | "1_canceled")),
             })
             .collect())
+    }
+
+    pub fn add_work(&self, parent: &Task, items: &[WorkItem]) -> Result<()> {
+        let subtask = |item: &WorkItem, with_state: bool| {
+            let mut v = json!({
+                "name": item.name,
+                "parent_id": parent.id,
+                "project_id": parent.project_id,
+                "user_ids": [[6, 0, [self.uid]]],
+            });
+            if with_state && item.done {
+                v["state"] = json!("1_done");
+            }
+            v
+        };
+        let create = |with_state: bool| {
+            let vals: Vec<Value> = items.iter().map(|i| subtask(i, with_state)).collect();
+            self.call("project.task", "create", json!({"vals_list": vals}))
+        };
+        create(true).or_else(|_| create(false))?;
+        let lines: Vec<Value> = items
+            .iter()
+            .filter(|i| i.hours > 0.)
+            .map(|i| {
+                json!({
+                    "task_id": parent.id,
+                    "project_id": parent.project_id,
+                    "name": i.name,
+                    "unit_amount": i.hours,
+                    "date": i.date,
+                })
+            })
+            .collect();
+        if !lines.is_empty() {
+            self.call(
+                "account.analytic.line",
+                "create",
+                json!({"vals_list": lines}),
+            )
+            .map_err(|e| anyhow!("Sub-tasks added, but timesheets failed: {e}"))?;
+        }
+        Ok(())
     }
 
     pub fn create_subtasks(&self, parent: i64, names: &[String]) -> Result<()> {
