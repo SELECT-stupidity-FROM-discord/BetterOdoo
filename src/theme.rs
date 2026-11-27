@@ -1,0 +1,44 @@
+pub const PAGE: u32 = 0xffffff;
+pub const SIDEBAR: u32 = 0xf7f7f5;
+pub const HOVER: u32 = 0xefefed;
+pub const BORDER: u32 = 0xe9e9e7;
+pub const ROW_RULE: u32 = 0xf1f1ef;
+pub const TEXT: u32 = 0x37352f;
+pub const TEXT_SOFT: u32 = 0x5f5e5b;
+pub const MUTED: u32 = 0x6f6e69;
+pub const ACCENT: u32 = 0x1f74c8;
+pub const DANGER: u32 = 0xb8312f;
+pub const SUCCESS: u32 = 0x3a7050;
+pub const SELECTION: u32 = 0x2383e247;
+
+pub const FONT: &str = "Inter";
+
+#[derive(Clone, Copy)]
+pub struct Tone {
+    pub bg: u32,
+    pub fg: u32,
+}
+
+pub const GRAY: Tone = Tone {
+    bg: 0xf1f1ef,
+    fg: 0x5f5e5b,
+};
+pub const BLUE: Tone = Tone {
+    bg: 0xe7f3f8,
+    fg: 0x2b6e94,
+};
+pub const ORANGE: Tone = Tone {
+    bg: 0xfaebdd,
+    fg: 0xa8550b,
+};
+pub const GREEN: Tone = Tone {
+    bg: 0xedf3ec,
+    fg: 0x3a7050,
+};
+pub const PURPLE: Tone = Tone {
+    bg: 0xf6f3f9,
+    fg: 0x7a4f9c,
+};
+pub const AI_BORDER: u32 = 0xe6dcef;
+
+pub const PEOPLE: [Tone; 4] = [BLUE, ORANGE, GREEN, PURPLE];
