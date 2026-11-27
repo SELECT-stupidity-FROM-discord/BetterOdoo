@@ -7,6 +7,7 @@ mod odoo;
 mod ollama;
 mod settings;
 mod settings_view;
+mod task_page;
 mod theme;
 mod tree;
 mod ui;
@@ -14,12 +15,12 @@ mod ui;
 use connect::{ConnectView, Connected};
 use gpui::{
     Anchor, App, Bounds, ClickEvent, Context, Div, Entity, FocusHandle, Focusable, FontWeight,
-    HighlightStyle, KeyDownEvent, MouseButton, MouseDownEvent, ScrollStrategy, SharedString,
-    Stateful, StyledText, TitlebarOptions, UniformListScrollHandle, Window, WindowBounds,
-    WindowOptions, anchored, deferred, div, point, prelude::*, px, rgb, size, uniform_list, white,
+    KeyDownEvent, MouseButton, MouseDownEvent, ScrollStrategy, SharedString, Stateful,
+    TitlebarOptions, UniformListScrollHandle, Window, WindowBounds, WindowOptions, anchored,
+    deferred, div, point, prelude::*, px, rgb, size, uniform_list, white,
 };
 use input::{InputEvent, TextInput};
-use odoo::{Login, Odoo, SubTask, Task, WorkItem};
+use odoo::{Login, Odoo, Stage, Task};
 use serde_json::json;
 use settings_view::{SettingsEvent, SettingsView};
 use std::{
@@ -27,13 +28,9 @@ use std::{
     ops::Range,
     sync::Arc,
 };
+use task_page::{Detail, Draft, Tab};
 use theme::*;
 use ui::{icon, kbd, popover, tag};
-
-struct Proposal {
-    item: WorkItem,
-    keep: bool,
-}
 
 struct BetterOdoo {
     focus: FocusHandle,
@@ -46,11 +43,19 @@ struct BetterOdoo {
     project: Option<String>,
     selected: usize,
     status: SharedString,
-    proposed: Vec<Proposal>,
+    proposed: Vec<Draft>,
+    draft_ai: bool,
     composer: Option<Entity<TextInput>>,
     drafting: bool,
     ai_error: Option<SharedString>,
-    page: bool,
+    viewing: Option<i64>,
+    tab: Tab,
+    notice: Option<SharedString>,
+    quick: Entity<TextInput>,
+    ts_name: Entity<TextInput>,
+    ts_hours: Entity<TextInput>,
+    ts_date: Entity<TextInput>,
+    stages: HashMap<i64, Vec<Stage>>,
     people_menu: bool,
     shortcuts: bool,
     settings: Option<Entity<SettingsView>>,
@@ -61,7 +66,7 @@ struct BetterOdoo {
     today: i64,
     connect: Option<Entity<ConnectView>>,
     rows_scroll: UniformListScrollHandle,
-    subtasks: HashMap<i64, Option<Result<Vec<SubTask>, SharedString>>>,
+    details: HashMap<i64, Option<Result<Detail, SharedString>>>,
 }
 
 const KEYCHAIN: &str = "BetterOdoo";
@@ -70,6 +75,16 @@ impl BetterOdoo {
     fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
         let filter = cx.new(|cx| TextInput::new("Filter or ask in plain words", cx));
         cx.subscribe_in(&filter, window, Self::on_filter).detach();
+        let entry = |placeholder: &'static str, cx: &mut Context<Self>| {
+            cx.new(|cx| TextInput::new(placeholder, cx))
+        };
+        let quick = entry("Add a sub-task and press Enter", cx);
+        let ts_name = entry("What did you work on?", cx);
+        let ts_hours = entry("Hours", cx);
+        let ts_date = entry("YYYY-MM-DD", cx);
+        for input in [&quick, &ts_name, &ts_hours, &ts_date] {
+            cx.subscribe_in(input, window, Self::on_entry).detach();
+        }
         let mut me = Self {
             focus: cx.focus_handle(),
             filter,
@@ -85,7 +100,15 @@ impl BetterOdoo {
             composer: None,
             drafting: false,
             ai_error: None,
-            page: false,
+            viewing: None,
+            tab: Tab::SubTasks,
+            notice: None,
+            quick,
+            ts_name,
+            ts_hours,
+            ts_date,
+            stages: HashMap::new(),
+            draft_ai: false,
             people_menu: false,
             shortcuts: false,
             settings: None,
@@ -96,7 +119,7 @@ impl BetterOdoo {
             today: date::today(),
             connect: None,
             rows_scroll: UniformListScrollHandle::new(),
-            subtasks: HashMap::new(),
+            details: HashMap::new(),
         };
         me.restore(window, cx);
         me
@@ -177,7 +200,7 @@ impl BetterOdoo {
                     Ok((version, t)) => {
                         this.version = version.into();
                         this.tasks = t;
-                        this.subtasks.clear();
+                        this.details.clear();
                         this.today = date::today();
                         this.status = "Synced just now".into();
                     }
@@ -256,156 +279,14 @@ impl BetterOdoo {
         p
     }
 
-    fn selected_task(&self, cx: &App) -> Option<Task> {
-        let row = self.rows(cx).into_iter().nth(self.selected)?;
-        self.tasks.get(row.idx).cloned()
-    }
-
-    fn open_composer(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.selected_task(cx).is_none() {
-            return;
-        }
-        self.page = true;
-        if self.composer.is_none() {
-            let input = cx.new(|cx| {
-                TextInput::new(
-                    "Fixed the ETA card and added driver contact, 2h. Push notifications yesterday, 3h.",
-                    cx,
-                )
-                .multiline()
-            });
-            cx.subscribe_in(&input, window, Self::on_composer).detach();
-            self.composer = Some(input);
-        }
-        if let Some(composer) = &self.composer {
-            window.focus(&composer.focus_handle(cx), cx);
-        }
-        cx.notify();
-    }
-
-    fn on_composer(
-        &mut self,
-        _: &Entity<TextInput>,
-        ev: &InputEvent,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        match ev {
-            InputEvent::Submit => self.draft(cx),
-            InputEvent::Cancel => {
-                self.reset_ai();
-                window.focus(&self.focus, cx);
+    fn follow(&mut self, rows: &[tree::Row], window: &mut Window, cx: &mut Context<Self>) {
+        match (self.viewing, rows.get(self.selected)) {
+            (Some(_), Some(row)) => {
+                let id = self.tasks[row.idx].id;
+                self.open_task(id, window, cx)
             }
-            InputEvent::Changed => self.ai_error = None,
+            _ => self.reset_ai(),
         }
-        cx.notify();
-    }
-
-    fn reset_ai(&mut self) {
-        self.proposed.clear();
-        self.composer = None;
-        self.drafting = false;
-        self.ai_error = None;
-    }
-
-    fn draft(&mut self, cx: &mut Context<Self>) {
-        let (Some(task), Some(composer)) = (self.selected_task(cx), &self.composer) else {
-            return;
-        };
-        let log = composer.read(cx).text().trim().to_string();
-        if log.is_empty() || self.drafting {
-            return;
-        }
-        self.drafting = true;
-        self.ai_error = None;
-        let today = self.today;
-        cx.spawn(async move |this, cx| {
-            let r = cx
-                .background_executor()
-                .spawn(async move { ai::work_items(&task.name, &log, today) })
-                .await;
-            this.update(cx, |this, cx| {
-                this.drafting = false;
-                match r {
-                    Ok(items) => {
-                        this.proposed = items
-                            .into_iter()
-                            .map(|item| Proposal { item, keep: true })
-                            .collect()
-                    }
-                    Err(e) => this.ai_error = Some(format!("AI: {e}").into()),
-                }
-                cx.notify();
-            })
-            .ok();
-        })
-        .detach();
-    }
-
-    fn ensure_subtasks(&mut self, parent: i64, cx: &mut Context<Self>) {
-        let Some(o) = self.odoo.clone() else { return };
-        if self.subtasks.contains_key(&parent) {
-            return;
-        }
-        self.subtasks.insert(parent, None);
-        cx.spawn(async move |this, cx| {
-            let r = cx
-                .background_executor()
-                .spawn(async move { o.subtasks(parent) })
-                .await;
-            this.update(cx, |this, cx| {
-                this.subtasks
-                    .insert(parent, Some(r.map_err(|e| e.to_string().into())));
-                cx.notify();
-            })
-            .ok();
-        })
-        .detach();
-    }
-
-    fn commit_work(&mut self, cx: &mut Context<Self>) {
-        let (Some(o), Some(task)) = (self.odoo.clone(), self.selected_task(cx)) else {
-            return;
-        };
-        let items: Vec<WorkItem> = self
-            .proposed
-            .iter()
-            .filter(|p| p.keep)
-            .map(|p| p.item.clone())
-            .collect();
-        if items.is_empty() || self.drafting {
-            return;
-        }
-        self.drafting = true;
-        cx.spawn(async move |this, cx| {
-            let parent = task.id;
-            let r = cx
-                .background_executor()
-                .spawn(async move { o.add_work(&task, &items).map(|_| items) })
-                .await;
-            this.update(cx, |this, cx| {
-                this.drafting = false;
-                match r {
-                    Ok(items) => {
-                        let logged: f64 = items.iter().map(|i| i.hours).sum();
-                        this.reset_ai();
-                        this.subtasks.remove(&parent);
-                        this.reload(cx);
-                        this.status = format!(
-                            "Added {} sub-task{} · logged {}",
-                            items.len(),
-                            if items.len() == 1 { "" } else { "s" },
-                            hours(logged)
-                        )
-                        .into();
-                    }
-                    Err(e) => this.ai_error = Some(e.to_string().into()),
-                }
-                cx.notify();
-            })
-            .ok();
-        })
-        .detach();
     }
 
     fn set_assignee(&mut self, who: Option<String>) {
@@ -438,11 +319,11 @@ impl BetterOdoo {
             "/" => window.focus(&self.filter.focus_handle(cx), cx),
             "j" | "down" if self.selected + 1 < n => {
                 self.selected += 1;
-                self.reset_ai();
+                self.follow(&rows, window, cx);
             }
             "k" | "up" => {
                 self.selected = self.selected.saturating_sub(1);
-                self.reset_ai();
+                self.follow(&rows, window, cx);
             }
             "right" | "left" => {
                 let Some(row) = rows.get(self.selected) else {
@@ -460,14 +341,17 @@ impl BetterOdoo {
             }
             "a" => self.open_composer(window, cx),
             "enter" if !self.proposed.is_empty() => self.commit_work(cx),
-            "enter" if n > 0 => self.page = true,
+            "enter" if n > 0 && self.viewing.is_none() => {
+                let id = self.tasks[rows[self.selected].idx].id;
+                self.open_task(id, window, cx)
+            }
             "escape" if self.people_menu => self.people_menu = false,
             "escape" if self.shortcuts => self.shortcuts = false,
             "escape" if self.stage_menu => self.stage_menu = false,
             "escape" if self.people_header_menu => self.people_header_menu = false,
             "escape" if !self.proposed.is_empty() => self.proposed.clear(),
             "escape" if self.composer.is_some() => self.reset_ai(),
-            "escape" => self.page = false,
+            "escape" => self.back(window, cx),
             "0" => self.set_assignee(None),
             d if d.len() == 1 && d.as_bytes()[0].is_ascii_digit() => {
                 let p = self
@@ -742,7 +626,7 @@ impl Render for BetterOdoo {
                 )
                 .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
                     this.project = None;
-                    this.page = false;
+                    this.viewing = None;
                     this.settings = None;
                     this.selected = 0;
                     cx.notify()
@@ -798,7 +682,7 @@ impl Render for BetterOdoo {
                     .child(div().truncate().child(p.clone()))
                     .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
                         this.project = Some(name.clone());
-                        this.page = false;
+                        this.viewing = None;
                         this.settings = None;
                         this.selected = 0;
                         this.rows_scroll.scroll_to_item(0, ScrollStrategy::Top);
@@ -1052,13 +936,10 @@ impl Render for BetterOdoo {
                     ),
             );
 
-        let selected: Option<Task> = rows
-            .get(self.selected)
-            .filter(|_| self.page)
-            .map(|r| self.tasks[r.idx].clone());
-        if let Some(id) = selected.as_ref().map(|t| t.id) {
-            self.ensure_subtasks(id, cx);
-        }
+        let selected: Option<Task> = self
+            .viewing
+            .and_then(|id| self.tasks.iter().find(|t| t.id == id))
+            .cloned();
         let content = match (&self.settings, selected) {
             (Some(view), _) => view.clone().into_any_element(),
             (None, Some(t)) => self.detail(&t, window, cx).into_any_element(),
@@ -1113,11 +994,11 @@ impl BetterOdoo {
         cx.delete_credentials(KEYCHAIN).detach();
         self.odoo = None;
         self.tasks.clear();
-        self.subtasks.clear();
+        self.details.clear();
         self.assignee = None;
         self.project = None;
         self.stage_filter.clear();
-        self.page = false;
+        self.viewing = None;
         self.settings = None;
         self.selected = 0;
         self.reset_ai();
@@ -1347,10 +1228,7 @@ impl BetterOdoo {
                     .when(!on, |d| d.hover(|s| s.bg(rgb(SIDEBAR))))
                     .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| {
                         this.selected = i;
-                        this.page = true;
-                        this.reset_ai();
-                        window.focus(&this.focus, cx);
-                        cx.notify()
+                        this.open_task(id, window, cx)
                     }))
                     .child(
                         div()
@@ -1478,420 +1356,6 @@ impl BetterOdoo {
                     )
             })
             .collect()
-    }
-
-    fn detail(&self, t: &Task, window: &Window, cx: &mut Context<Self>) -> Stateful<Div> {
-        let panel = div()
-            .flex()
-            .flex_col()
-            .w_full()
-            .max_w(px(760.))
-            .pt(px(40.))
-            .pb(px(64.))
-            .gap(px(18.));
-        let mut due = date::due(t.deadline.as_deref(), self.today);
-        due.overdue &= !t.done;
-        let prop = |icon_name: &str, label: &str| {
-            div()
-                .flex_none()
-                .w(px(120.))
-                .flex()
-                .items_center()
-                .gap(px(8.))
-                .text_color(rgb(MUTED))
-                .child(icon(icon_name, 15., MUTED))
-                .child(label.to_string())
-        };
-        let row = |l: Div, v: Div| div().flex().items_center().min_h(px(26.)).child(l).child(v);
-        let kept = self.proposed.iter().filter(|p| p.keep).count();
-        let loaded = self.subtasks.get(&t.id).cloned().flatten();
-        let failed = loaded.clone().and_then(|r| r.err());
-        let existing = loaded.as_ref().and_then(|r| r.as_ref().ok());
-        let count = existing
-            .filter(|s| !s.is_empty())
-            .map(|s| (s.iter().filter(|x| x.done).count(), s.len()));
-
-        let inner =
-            panel
-                .child(
-                    div()
-                        .flex()
-                        .gap(px(6.))
-                        .text_size(px(12.))
-                        .text_color(rgb(MUTED))
-                        .child(
-                            div()
-                                .id("back")
-                                .cursor_pointer()
-                                .hover(|s| s.text_color(rgb(TEXT)))
-                                .child(self.project.clone().unwrap_or("My Tasks".into()))
-                                .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
-                                    this.page = false;
-                                    this.reset_ai();
-                                    cx.notify()
-                                })),
-                        )
-                        .child(format!(
-                            "/ {} / {}#{}",
-                            t.project,
-                            t.parent
-                                .as_ref()
-                                .map(|p| format!("{} / ", p.1))
-                                .unwrap_or_default(),
-                            t.id
-                        )),
-                )
-                .child(
-                    div()
-                        .text_size(px(32.))
-                        .font_weight(FontWeight::BOLD)
-                        .line_height(px(40.))
-                        .child(t.name.clone()),
-                )
-                .child(
-                    div()
-                        .flex()
-                        .flex_col()
-                        .gap(px(10.))
-                        .child(row(
-                            prop("status", "Status"),
-                            div()
-                                .flex()
-                                .child(tag(t.stage.clone(), stage_tone(&t.stage), 12.)),
-                        ))
-                        .child(row(
-                            prop("user", "Assignees"),
-                            div().child(t.assignees.join(", ")),
-                        ))
-                        .child(row(
-                            prop("calendar", "Due"),
-                            div()
-                                .when(due.overdue, |d| d.text_color(rgb(DANGER)))
-                                .child(due.label),
-                        ))
-                        .child(row(
-                            prop("clock", "Logged"),
-                            div().child(hours(t.logged_hours)),
-                        )),
-                )
-                .child(div().h(px(1.)).bg(rgb(BORDER)))
-                .child(
-                    div()
-                        .flex()
-                        .items_center()
-                        .justify_between()
-                        .child(
-                            div()
-                                .flex()
-                                .items_baseline()
-                                .gap(px(8.))
-                                .child(div().font_weight(FontWeight::SEMIBOLD).child("Sub-tasks"))
-                                .when_some(count, |d, (done, total)| {
-                                    d.child(
-                                        div()
-                                            .text_size(px(12.))
-                                            .text_color(rgb(MUTED))
-                                            .child(format!("{done}/{total} done")),
-                                    )
-                                }),
-                        )
-                        .child(
-                            div()
-                                .id("autofill")
-                                .flex()
-                                .items_center()
-                                .gap(px(6.))
-                                .px(px(10.))
-                                .py(px(6.))
-                                .min_h(px(32.))
-                                .rounded(px(6.))
-                                .border_1()
-                                .border_color(rgb(AI_BORDER))
-                                .bg(rgb(PURPLE.bg))
-                                .text_color(rgb(PURPLE.fg))
-                                .text_size(px(13.))
-                                .font_weight(FontWeight::MEDIUM)
-                                .cursor_pointer()
-                                .child(icon("sparkle", 14., PURPLE.fg))
-                                .child("Autofill with AI")
-                                .on_click(cx.listener(|this, _: &ClickEvent, window, cx| {
-                                    this.open_composer(window, cx)
-                                })),
-                        ),
-                )
-                .when_some(failed, |d, e| {
-                    d.child(
-                        div()
-                            .text_size(px(13.))
-                            .text_color(rgb(DANGER))
-                            .child(format!("Couldn’t load sub-tasks: {e}")),
-                    )
-                })
-                .when(loaded.is_none(), |d| {
-                    d.child(
-                        div()
-                            .text_size(px(13.))
-                            .text_color(rgb(MUTED))
-                            .child("Loading sub-tasks…"),
-                    )
-                })
-                .when_some(existing.filter(|s| !s.is_empty()), |d, subs| {
-                    d.child(
-                        div()
-                            .flex()
-                            .flex_col()
-                            .gap(px(8.))
-                            .children(subs.iter().map(|s| {
-                                let check = div()
-                                    .flex_none()
-                                    .mt(px(2.))
-                                    .size(px(15.))
-                                    .rounded(px(3.))
-                                    .flex()
-                                    .items_center()
-                                    .justify_center();
-                                let check = if s.done {
-                                    check.bg(rgb(SUCCESS)).child(icon("check", 11., PAGE))
-                                } else {
-                                    check.border_1().border_color(rgb(MUTED))
-                                };
-                                div().flex().items_start().gap(px(10.)).child(check).child(
-                                    div()
-                                        .flex_1()
-                                        .min_w_0()
-                                        .text_color(rgb(if s.done { MUTED } else { TEXT }))
-                                        .child(s.name.clone()),
-                                )
-                            })),
-                    )
-                })
-                .when(
-                    self.composer.is_none() && existing.is_some_and(|s| s.is_empty()),
-                    |d| {
-                        let text =
-                            "No sub-tasks yet. Press a, describe what you did, and AI fills them in with timesheets.";
-                        let key = text.find(" a,").map_or(0..0, |i| i + 1..i + 2);
-                        d.child(div().text_size(px(13.)).text_color(rgb(MUTED)).child(
-                            StyledText::new(text).with_highlights([(
-                                key,
-                                HighlightStyle {
-                                    color: Some(rgb(TEXT).into()),
-                                    font_weight: Some(FontWeight::SEMIBOLD),
-                                    ..Default::default()
-                                },
-                            )]),
-                        ))
-                    },
-                )
-                .when(self.composer.is_some() && self.proposed.is_empty(), |d| {
-                    d.child(self.composer_card(window, cx))
-                })
-                .when(!self.proposed.is_empty(), |d| {
-                    d.child(self.proposal(kept, cx))
-                });
-        div()
-            .id("detail")
-            .flex_1()
-            .min_w_0()
-            .h_full()
-            .overflow_y_scroll()
-            .flex()
-            .flex_col()
-            .items_center()
-            .px(px(48.))
-            .child(inner)
-    }
-
-    fn ai_button(&self, id: &'static str, label: String, primary: bool) -> Stateful<Div> {
-        div()
-            .id(id)
-            .flex()
-            .items_center()
-            .px(px(14.))
-            .py(px(7.))
-            .min_h(px(34.))
-            .rounded(px(6.))
-            .cursor_pointer()
-            .text_size(px(13.))
-            .when(primary, |d| {
-                d.bg(rgb(ACCENT))
-                    .text_color(white())
-                    .font_weight(FontWeight::MEDIUM)
-            })
-            .when(!primary, |d| {
-                d.border_1()
-                    .border_color(rgb(BORDER))
-                    .bg(rgb(PAGE))
-                    .text_color(rgb(TEXT_SOFT))
-            })
-            .when(self.drafting, |d| d.opacity(0.6))
-            .child(label)
-    }
-
-    fn ai_card(&self, title: &'static str) -> Div {
-        div()
-            .flex()
-            .flex_col()
-            .gap(px(10.))
-            .p(px(14.))
-            .rounded(px(8.))
-            .bg(rgb(PURPLE.bg))
-            .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .gap(px(6.))
-                    .text_size(px(12.))
-                    .font_weight(FontWeight::MEDIUM)
-                    .text_color(rgb(PURPLE.fg))
-                    .child(icon("sparkle", 13., PURPLE.fg))
-                    .child(title),
-            )
-            .when_some(self.ai_error.clone(), |d, e| {
-                d.child(div().text_size(px(13.)).text_color(rgb(DANGER)).child(e))
-            })
-    }
-
-    fn composer_card(&self, window: &Window, cx: &mut Context<Self>) -> Div {
-        let Some(composer) = &self.composer else {
-            return div();
-        };
-        let focused = composer.focus_handle(cx).is_focused(window);
-        let submit = if cfg!(target_os = "macos") {
-            "⌘"
-        } else {
-            "Ctrl"
-        };
-        self.ai_card("Describe what you did")
-            .child(
-                div()
-                    .min_h(px(88.))
-                    .px(px(12.))
-                    .py(px(10.))
-                    .rounded(px(6.))
-                    .border_1()
-                    .border_color(rgb(if focused { PURPLE.fg } else { AI_BORDER }))
-                    .bg(rgb(PAGE))
-                    .line_height(px(21.))
-                    .child(composer.clone()),
-            )
-            .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .gap(px(8.))
-                    .child(
-                        div()
-                            .flex_1()
-                            .flex()
-                            .items_center()
-                            .gap(px(4.))
-                            .text_size(px(12.))
-                            .text_color(rgb(MUTED))
-                            .child(kbd(submit))
-                            .child(kbd("↵"))
-                            .child("to draft · Esc to cancel"),
-                    )
-                    .child(
-                        self.ai_button(
-                            "draft",
-                            if self.drafting {
-                                "Drafting…"
-                            } else {
-                                "Draft"
-                            }
-                            .into(),
-                            true,
-                        )
-                        .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.draft(cx))),
-                    ),
-            )
-    }
-
-    fn proposal(&self, kept: usize, cx: &mut Context<Self>) -> Div {
-        let logged: f64 = self
-            .proposed
-            .iter()
-            .filter(|p| p.keep)
-            .map(|p| p.item.hours)
-            .sum();
-        let action = format!(
-            "Add {kept} sub-task{}{}",
-            if kept == 1 { "" } else { "s" },
-            if logged > 0. {
-                format!(" · log {}", hours(logged))
-            } else {
-                String::new()
-            }
-        );
-        self.ai_card("Drafted by AI · nothing saved yet")
-            .children(self.proposed.iter().enumerate().map(|(i, p)| {
-                let check = div()
-                    .flex_none()
-                    .mt(px(2.))
-                    .size(px(15.))
-                    .rounded(px(3.))
-                    .flex()
-                    .items_center()
-                    .justify_center();
-                let check = if p.keep {
-                    check.bg(rgb(PURPLE.fg)).child(icon("check", 11., PAGE))
-                } else {
-                    check.bg(rgb(PAGE)).border_1().border_color(rgb(MUTED))
-                };
-                let when = date::due(Some(&p.item.date), self.today).label;
-                div()
-                    .id(("proposal", i))
-                    .flex()
-                    .items_start()
-                    .gap(px(10.))
-                    .cursor_pointer()
-                    .child(check)
-                    .child(
-                        div()
-                            .flex_1()
-                            .min_w_0()
-                            .text_color(rgb(if p.keep { TEXT } else { MUTED }))
-                            .child(p.item.name.clone()),
-                    )
-                    .child(
-                        div()
-                            .flex_none()
-                            .flex()
-                            .gap(px(10.))
-                            .text_size(px(12.))
-                            .text_color(rgb(MUTED))
-                            .child(hours(p.item.hours))
-                            .child(div().w(px(76.)).flex().justify_end().child(when)),
-                    )
-                    .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
-                        this.proposed[i].keep = !this.proposed[i].keep;
-                        cx.notify()
-                    }))
-            }))
-            .child(
-                div()
-                    .flex()
-                    .gap(px(8.))
-                    .mt(px(4.))
-                    .child(
-                        self.ai_button("create", action, true)
-                            .when(kept == 0, |d| d.opacity(0.5))
-                            .on_click(
-                                cx.listener(|this, _: &ClickEvent, _, cx| this.commit_work(cx)),
-                            ),
-                    )
-                    .child(
-                        self.ai_button("discard", "Edit description".into(), false)
-                            .on_click(cx.listener(|this, _: &ClickEvent, window, cx| {
-                                this.proposed.clear();
-                                if let Some(c) = &this.composer {
-                                    window.focus(&c.focus_handle(cx), cx);
-                                }
-                                cx.notify()
-                            })),
-                    ),
-            )
     }
 }
 

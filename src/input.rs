@@ -140,6 +140,13 @@ impl TextInput {
         self
     }
 
+    pub fn set_text(&mut self, text: &str, cx: &mut Context<Self>) {
+        self.content = text.to_string().into();
+        self.selected_range = text.len()..text.len();
+        self.marked_range = None;
+        cx.notify();
+    }
+
     pub fn text(&self) -> &str {
         &self.content
     }

@@ -16,7 +16,10 @@ pub struct Task {
     pub project: String,
     pub project_id: Option<i64>,
     pub parent: Option<(i64, String)>,
+    pub sequence: i64,
+    pub stage_id: Option<i64>,
     pub stage: String,
+    pub state: String,
     pub assignees: Vec<String>,
     pub deadline: Option<String>,
     pub priority_high: bool,
@@ -33,9 +36,18 @@ pub struct WorkItem {
 }
 
 #[derive(Clone, Debug)]
-pub struct SubTask {
+pub struct Stage {
+    pub id: i64,
     pub name: String,
-    pub done: bool,
+    pub fold: bool,
+}
+
+#[derive(Clone, Debug)]
+pub struct Timesheet {
+    pub name: String,
+    pub hours: f64,
+    pub date: String,
+    pub user: String,
 }
 
 #[derive(Clone)]
@@ -236,6 +248,7 @@ impl Odoo {
             "name",
             "project_id",
             "parent_id",
+            "sequence",
             "stage_id",
             "user_ids",
             "date_deadline",
@@ -310,7 +323,10 @@ impl Odoo {
                     .get(0)
                     .and_then(|v| v.as_i64())
                     .map(|id| (id, m2o(&r["parent_id"]))),
+                sequence: r["sequence"].as_i64().unwrap_or(0),
+                stage_id: r["stage_id"].get(0).and_then(|v| v.as_i64()),
                 stage: m2o(&r["stage_id"]),
+                state: r["state"].as_str().unwrap_or("").into(),
                 assignees: r["user_ids"]
                     .as_array()
                     .into_iter()
@@ -330,56 +346,39 @@ impl Odoo {
             .collect())
     }
 
-    pub fn subtasks(&self, parent: i64) -> Result<Vec<SubTask>> {
-        let query = |fields: Value| {
-            self.call(
-                "project.task",
-                "search_read",
-                json!({"domain": [["parent_id", "=", parent]], "fields": fields, "order": "sequence, id"}),
-            )
-        };
-        let rows = query(json!(["name", "state"])).or_else(|_| query(json!(["name"])))?;
-        Ok(rows
+    pub fn add_work(&self, parent: &Task, items: &[WorkItem]) -> Result<()> {
+        let vals: Vec<Value> = items
+            .iter()
+            .map(|i| {
+                json!({
+                    "name": i.name,
+                    "parent_id": parent.id,
+                    "project_id": parent.project_id,
+                    "user_ids": [[6, 0, [self.uid]]],
+                })
+            })
+            .collect();
+        let made = self.call("project.task", "create", json!({"vals_list": vals}))?;
+        let done: Vec<i64> = made
             .as_array()
             .into_iter()
             .flatten()
-            .map(|r| SubTask {
-                name: r["name"].as_str().unwrap_or("").into(),
-                done: matches!(r["state"].as_str(), Some("1_done" | "1_canceled")),
-            })
-            .collect())
-    }
-
-    pub fn add_work(&self, parent: &Task, items: &[WorkItem]) -> Result<()> {
-        let subtask = |item: &WorkItem, with_state: bool| {
-            let mut v = json!({
-                "name": item.name,
-                "parent_id": parent.id,
-                "project_id": parent.project_id,
-                "user_ids": [[6, 0, [self.uid]]],
-            });
-            if with_state && item.done {
-                v["state"] = json!("1_done");
-            }
-            v
-        };
-        let create = |with_state: bool| {
-            let vals: Vec<Value> = items.iter().map(|i| subtask(i, with_state)).collect();
-            self.call("project.task", "create", json!({"vals_list": vals}))
-        };
-        create(true).or_else(|_| create(false))?;
+            .zip(items)
+            .filter(|(_, i)| i.done)
+            .filter_map(|(id, _)| id.as_i64())
+            .collect();
+        if !done.is_empty() {
+            self.call(
+                "project.task",
+                "write",
+                json!({"ids": done, "vals": {"state": "1_done"}}),
+            )
+            .map_err(|e| anyhow!("Sub-tasks added, but couldn’t mark them done: {e}"))?;
+        }
         let lines: Vec<Value> = items
             .iter()
             .filter(|i| i.hours > 0.)
-            .map(|i| {
-                json!({
-                    "task_id": parent.id,
-                    "project_id": parent.project_id,
-                    "name": i.name,
-                    "unit_amount": i.hours,
-                    "date": i.date,
-                })
-            })
+            .map(|i| timesheet_vals(parent, i))
             .collect();
         if !lines.is_empty() {
             self.call(
@@ -391,6 +390,155 @@ impl Odoo {
         }
         Ok(())
     }
+
+    pub fn add_timesheet(&self, task: &Task, item: &WorkItem) -> Result<()> {
+        self.call(
+            "account.analytic.line",
+            "create",
+            json!({"vals_list": [timesheet_vals(task, item)]}),
+        )?;
+        Ok(())
+    }
+
+    pub fn timesheets(&self, task: i64) -> Result<Vec<Timesheet>> {
+        let rows = self.call(
+            "account.analytic.line",
+            "search_read",
+            json!({
+                "domain": [["task_id", "=", task]],
+                "fields": ["name", "unit_amount", "date", "user_id"],
+                "order": "date desc, id desc",
+            }),
+        )?;
+        Ok(rows
+            .as_array()
+            .into_iter()
+            .flatten()
+            .map(|r| Timesheet {
+                name: r["name"].as_str().unwrap_or("").into(),
+                hours: r["unit_amount"].as_f64().unwrap_or(0.),
+                date: r["date"].as_str().unwrap_or("").into(),
+                user: if r["user_id"].get(0).and_then(|v| v.as_i64()) == Some(self.uid) {
+                    "Me".into()
+                } else {
+                    m2o(&r["user_id"])
+                },
+            })
+            .collect())
+    }
+
+    pub fn description(&self, task: i64) -> Result<String> {
+        let rows = self.call(
+            "project.task",
+            "read",
+            json!({"ids": [task], "fields": ["description"]}),
+        )?;
+        Ok(html_text(rows[0]["description"].as_str().unwrap_or("")))
+    }
+
+    pub fn stages(&self, project: i64) -> Result<Vec<Stage>> {
+        let rows = self.call(
+            "project.task.type",
+            "search_read",
+            json!({
+                "domain": [["project_ids", "in", [project]]],
+                "fields": ["name", "fold"],
+                "order": "sequence, id",
+            }),
+        )?;
+        Ok(rows
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|r| {
+                Some(Stage {
+                    id: r["id"].as_i64()?,
+                    name: r["name"].as_str()?.into(),
+                    fold: r["fold"] == true,
+                })
+            })
+            .collect())
+    }
+
+    pub fn set_stage(&self, task: i64, stage: i64) -> Result<()> {
+        self.write(&[task], json!({"stage_id": stage}))
+    }
+
+    pub fn set_done(&self, task: i64, done: bool) -> Result<()> {
+        let state = if done { "1_done" } else { "01_in_progress" };
+        self.write(&[task], json!({"state": state}))
+    }
+
+    pub fn resequence(&self, order: &[i64]) -> Result<()> {
+        for (i, id) in order.iter().enumerate() {
+            self.write(&[*id], json!({"sequence": (i as i64 + 1) * 10}))?;
+        }
+        Ok(())
+    }
+
+    fn write(&self, ids: &[i64], vals: Value) -> Result<()> {
+        self.call("project.task", "write", json!({"ids": ids, "vals": vals}))?;
+        Ok(())
+    }
+}
+
+fn timesheet_vals(task: &Task, item: &WorkItem) -> Value {
+    json!({
+        "task_id": task.id,
+        "project_id": task.project_id,
+        "name": item.name,
+        "unit_amount": item.hours,
+        "date": item.date,
+    })
+}
+
+pub fn html_text(html: &str) -> String {
+    let mut out = String::new();
+    let mut chars = html.chars();
+    while let Some(c) = chars.next() {
+        if c != '<' {
+            out.push(c);
+            continue;
+        }
+        let tag: String = chars.by_ref().take_while(|&c| c != '>').collect();
+        let tag = tag.trim().to_lowercase();
+        let name = tag
+            .split(|c: char| c.is_whitespace() || c == '/')
+            .find(|s| !s.is_empty());
+        if tag.starts_with("br")
+            || (tag.starts_with('/')
+                && matches!(
+                    name,
+                    Some("p" | "div" | "li" | "tr" | "h1" | "h2" | "h3" | "h4")
+                ))
+        {
+            out.push('\n');
+        } else if name == Some("li") && !tag.starts_with('/') {
+            out.push_str("• ");
+        }
+    }
+    let text = out
+        .replace("&nbsp;", " ")
+        .replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&quot;", "\"")
+        .replace("&#39;", "'")
+        .replace("&amp;", "&");
+    let mut collapsed = String::new();
+    let mut blank = 0;
+    for line in text.lines() {
+        if line.trim().is_empty() {
+            blank += 1;
+            if blank > 1 {
+                continue;
+            }
+        } else {
+            blank = 0;
+        }
+        collapsed.push_str(line.trim_end());
+        collapsed.push('\n');
+    }
+    collapsed.trim().to_string()
 }
 
 fn m2o(v: &Value) -> String {
@@ -400,6 +548,15 @@ fn m2o(v: &Value) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn html_reads_as_plain_text() {
+        let html = "<p>Fix the <b>ETA</b> card &amp; push</p><ul><li>one</li><li>two</li></ul><p><br></p><p>end</p>";
+        assert_eq!(
+            html_text(html),
+            "Fix the ETA card & push\n• one\n• two\n\nend"
+        );
+    }
 
     #[test]
     fn urls_and_credentials() {
