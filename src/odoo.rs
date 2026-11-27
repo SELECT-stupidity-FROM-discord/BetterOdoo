@@ -19,6 +19,7 @@ pub struct Task {
     pub deadline: Option<String>,
     pub priority_high: bool,
     pub logged_hours: f64,
+    pub done: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -221,18 +222,47 @@ impl Odoo {
     }
 
     pub fn tasks(&self, domain: Value) -> Result<Vec<Task>> {
-        let query = |domain: &Value| {
-            self.call("project.task", "search_read", json!({
-                "domain": domain,
-                "fields": ["name", "project_id", "stage_id", "user_ids", "date_deadline", "priority", "effective_hours"],
-                "order": "priority desc, date_deadline asc",
-            }))
+        let fields = [
+            "name",
+            "project_id",
+            "stage_id",
+            "user_ids",
+            "date_deadline",
+            "priority",
+            "effective_hours",
+        ];
+        let query = |extra: &[&str]| {
+            let fields: Vec<&str> = fields.iter().chain(extra).copied().collect();
+            self.call(
+                "project.task",
+                "search_read",
+                json!({"domain": domain, "fields": fields, "order": "priority desc, date_deadline asc"}),
+            )
         };
-        let mut open = domain.clone();
-        if let Some(terms) = open.as_array_mut() {
-            terms.push(json!(["state", "not in", ["1_done", "1_canceled"]]));
-        }
-        let rows = query(&open).or_else(|_| query(&domain))?;
+        let rows = query(&["state"]).or_else(|_| query(&[]))?;
+        let stage_ids: Vec<i64> = rows
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|r| r["stage_id"].get(0)?.as_i64())
+            .collect::<std::collections::BTreeSet<_>>()
+            .into_iter()
+            .collect();
+        let folded: Vec<i64> = self
+            .call(
+                "project.task.type",
+                "read",
+                json!({"ids": stage_ids, "fields": ["fold"]}),
+            )
+            .map(|v| {
+                v.as_array()
+                    .into_iter()
+                    .flatten()
+                    .filter(|s| s["fold"] == true)
+                    .filter_map(|s| s["id"].as_i64())
+                    .collect()
+            })
+            .unwrap_or_default();
         let ids: Vec<i64> = rows
             .as_array()
             .into_iter()
@@ -275,6 +305,11 @@ impl Odoo {
                 deadline: r["date_deadline"].as_str().map(Into::into),
                 priority_high: r["priority"] == "1",
                 logged_hours: r["effective_hours"].as_f64().unwrap_or(0.),
+                done: matches!(r["state"].as_str(), Some("1_done" | "1_canceled"))
+                    || r["stage_id"]
+                        .get(0)
+                        .and_then(|v| v.as_i64())
+                        .is_some_and(|id| folded.contains(&id)),
             })
             .collect())
     }
