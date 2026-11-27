@@ -1,5 +1,5 @@
 use super::ChildEvent;
-use crate::components::{Button, Card, CheckCircle, Field, Tint, Variant, icon, kbd};
+use crate::components::{Button, Card, Checkbox, Field, Tint, Variant, icon, kbd};
 use crate::format::{hours, hours_text, parse_hours};
 use crate::input::{InputEvent, TextInput};
 use crate::odoo::WorkItem;
@@ -366,7 +366,7 @@ impl EntryEditor {
                             .flex_none()
                             .w(px(36.))
                             .cursor_pointer()
-                            .child(CheckCircle::new(d.done))
+                            .child(Checkbox::new(d.done))
                             .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
                                 this.drafts[i].done = !this.drafts[i].done;
                                 cx.notify()

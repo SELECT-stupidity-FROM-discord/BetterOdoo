@@ -1,6 +1,6 @@
 use super::ChildEvent;
 use super::entries::EntryEditor;
-use crate::components::{Button, CheckCircle, Field, Variant, icon, tag};
+use crate::components::{Checkbox, GhostInput, icon, tag};
 use crate::date;
 use crate::format::stage_tone;
 use crate::input::{InputEvent, TextInput};
@@ -56,7 +56,7 @@ impl SubtaskList {
     ) -> Self {
         cx.observe(&store, |_, _, cx| cx.notify()).detach();
         cx.observe(&entries, |_, _, cx| cx.notify()).detach();
-        let quick = cx.new(|cx| TextInput::new("Add a sub-task and press Enter", cx));
+        let quick = cx.new(|cx| TextInput::new("Add a sub-task…", cx));
         cx.subscribe_in(&quick, window, Self::on_quick).detach();
         Self {
             store,
@@ -119,29 +119,6 @@ impl SubtaskList {
         .detach();
     }
 
-    fn toolbar(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        div()
-            .flex()
-            .items_center()
-            .justify_end()
-            .gap(px(8.))
-            .child(
-                Button::new("add-entries", "Add entries")
-                    .icon("plus")
-                    .on_click(cx.listener(|this, _: &ClickEvent, window, cx| {
-                        this.entries.update(cx, |e, cx| e.open_manual(window, cx))
-                    })),
-            )
-            .child(
-                Button::new("autofill", "Autofill with AI")
-                    .icon("sparkle")
-                    .variant(Variant::Ai)
-                    .on_click(cx.listener(|this, _: &ClickEvent, window, cx| {
-                        this.entries.update(cx, |e, cx| e.open_ai(window, cx))
-                    })),
-            )
-    }
-
     fn row(&self, i: usize, s: &Task, cx: &mut Context<Self>) -> Stateful<Div> {
         let parent = self.task;
         let id = s.id;
@@ -179,7 +156,7 @@ impl SubtaskList {
                     .id(("done", i))
                     .flex_none()
                     .cursor_pointer()
-                    .child(CheckCircle::new(s.done))
+                    .child(Checkbox::new(s.done))
                     .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
                         this.store.update(cx, |s, cx| s.toggle_done(id, cx))
                     })),
@@ -215,7 +192,6 @@ impl Render for SubtaskList {
             .flex()
             .flex_col()
             .gap(px(12.))
-            .child(self.toolbar(cx))
             .child(self.entries.clone())
             .child(
                 div().flex().flex_col().children(
@@ -228,13 +204,6 @@ impl Render for SubtaskList {
             .when(subs.is_empty(), |d| {
                 d.child(div().text_color(rgb(MUTED)).child("No sub-tasks yet."))
             })
-            .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .gap(px(8.))
-                    .child(icon("plus", 14., MUTED))
-                    .child(div().flex_1().child(Field::new(&self.quick))),
-            )
+            .child(GhostInput::new(&self.quick, "plus"))
     }
 }

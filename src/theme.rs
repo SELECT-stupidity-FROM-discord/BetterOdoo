@@ -9,6 +9,8 @@ pub const MUTED: u32 = 0x6f6e69;
 pub const ACCENT: u32 = 0x1f74c8;
 pub const DANGER: u32 = 0xb8312f;
 pub const SUCCESS: u32 = 0x3a7050;
+pub const CHECK: u32 = 0x25a06c;
+pub const BORDER_STRONG: u32 = 0xc7c6c2;
 pub const SELECTION: u32 = 0x2383e247;
 
 pub const FONT: &str = "Inter";

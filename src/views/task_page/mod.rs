@@ -2,7 +2,7 @@ mod entries;
 mod subtasks;
 mod timesheets;
 
-use crate::components::{Property, Segmented, TabBar, tag};
+use crate::components::{Button, Property, Segmented, TabBar, Variant, tag};
 use crate::date;
 use crate::format::{hours, stage_tone};
 use crate::odoo::Task;
@@ -244,7 +244,29 @@ impl TaskPage {
                 subs.len()
             )
         };
+        let actions = (self.tab == Tab::SubTasks).then(|| {
+            div()
+                .flex()
+                .items_center()
+                .gap(px(8.))
+                .child(
+                    Button::new("add-entries", "Add entries")
+                        .icon("plus")
+                        .on_click(cx.listener(|this, _: &ClickEvent, window, cx| {
+                            this.entries.update(cx, |e, cx| e.open_manual(window, cx))
+                        })),
+                )
+                .child(
+                    Button::new("autofill", "Autofill with AI")
+                        .icon("sparkle")
+                        .variant(Variant::Ai)
+                        .on_click(cx.listener(|this, _: &ClickEvent, window, cx| {
+                            this.entries.update(cx, |e, cx| e.open_ai(window, cx))
+                        })),
+                )
+        });
         TabBar::new()
+            .trailing(actions)
             .tab(
                 "Description",
                 self.tab == Tab::Description,

@@ -24,7 +24,9 @@ const ICONS: &[(&str, &[u8])] = icons!(
     "filter",
     "cog",
     "chevron-right",
-    "chevron-down"
+    "chevron-down",
+    "plus",
+    "grip"
 );
 
 pub struct Assets;

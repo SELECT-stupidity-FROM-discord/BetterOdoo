@@ -3,29 +3,31 @@ use crate::theme::*;
 use gpui::{App, IntoElement, RenderOnce, Window, div, prelude::*, px, rgb};
 
 #[derive(IntoElement)]
-pub struct CheckCircle {
+pub struct Checkbox {
     on: bool,
 }
 
-impl CheckCircle {
+impl Checkbox {
     pub fn new(on: bool) -> Self {
         Self { on }
     }
 }
 
-impl RenderOnce for CheckCircle {
+impl RenderOnce for Checkbox {
     fn render(self, _: &mut Window, _: &mut App) -> impl IntoElement {
         div()
             .flex_none()
-            .size(px(16.))
-            .rounded_full()
+            .size(px(18.))
+            .rounded(px(5.))
             .flex()
             .items_center()
             .justify_center()
             .when(self.on, |d| {
-                d.bg(rgb(SUCCESS)).child(icon("check", 11., PAGE))
+                d.bg(rgb(CHECK)).child(icon("check", 12., 0xffffff))
             })
-            .when(!self.on, |d| d.border_1().border_color(rgb(MUTED)))
+            .when(!self.on, |d| {
+                d.border_1().border_color(rgb(BORDER_STRONG)).bg(rgb(PAGE))
+            })
     }
 }
 
