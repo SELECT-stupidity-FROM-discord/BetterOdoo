@@ -9,10 +9,11 @@ mod ui;
 
 use connect::{ConnectView, Connected};
 use gpui::{
-    App, Bounds, ClickEvent, Context, Div, Entity, FocusHandle, Focusable, FontWeight,
-    HighlightStyle, KeyDownEvent, ScrollStrategy, SharedString, Stateful, StyledText,
-    TitlebarOptions, UniformListScrollHandle, Window, WindowBounds, WindowOptions, div, prelude::*,
-    px, rgb, size, uniform_list, white,
+    App, Bounds, BoxShadow, ClickEvent, Context, Div, Entity, FocusHandle, Focusable, FontWeight,
+    HighlightStyle, KeyDownEvent, MouseButton, MouseDownEvent, ScrollStrategy, SharedString,
+    Stateful, StyledText, TitlebarOptions, UniformListScrollHandle, Window, WindowBounds,
+    WindowOptions, anchored, black, deferred, div, point, prelude::*, px, rgb, size, uniform_list,
+    white,
 };
 use input::{InputEvent, TextInput};
 use odoo::{Login, Odoo, SubTask, Task};
@@ -39,6 +40,7 @@ struct BetterOdoo {
     status: SharedString,
     proposed: Vec<Proposal>,
     page: bool,
+    people_menu: bool,
     today: i64,
     connect: Option<Entity<ConnectView>>,
     rows_scroll: UniformListScrollHandle,
@@ -64,6 +66,7 @@ impl BetterOdoo {
             status: "Connecting…".into(),
             proposed: vec![],
             page: false,
+            people_menu: false,
             today: date::today(),
             connect: None,
             rows_scroll: UniformListScrollHandle::new(),
@@ -202,14 +205,13 @@ impl BetterOdoo {
     }
 
     fn people(&self) -> Vec<String> {
-        let mut p: Vec<String> = self
-            .tasks
-            .iter()
-            .flat_map(|t| t.assignees.clone())
-            .collect();
-        p.sort_by_key(|n| (n != "Me", n.clone()));
-        p.dedup();
-        p
+        let mut counts: HashMap<&str, usize> = HashMap::new();
+        for name in self.tasks.iter().flat_map(|t| &t.assignees) {
+            *counts.entry(name).or_default() += 1;
+        }
+        let mut p: Vec<(&str, usize)> = counts.into_iter().collect();
+        p.sort_by_key(|&(n, c)| (n != "Me", std::cmp::Reverse(c), n.to_lowercase()));
+        p.into_iter().map(|(n, _)| n.to_string()).collect()
     }
 
     fn projects(&self) -> Vec<String> {
@@ -325,11 +327,16 @@ impl BetterOdoo {
             "s" => self.suggest_subtasks(cx),
             "enter" if !self.proposed.is_empty() => self.commit_subtasks(cx),
             "enter" if n > 0 => self.page = true,
+            "escape" if self.people_menu => self.people_menu = false,
             "escape" if !self.proposed.is_empty() => self.proposed.clear(),
             "escape" => self.page = false,
             "0" => self.set_assignee(None),
             d if d.len() == 1 && d.as_bytes()[0].is_ascii_digit() => {
-                let p = self.people().get(d.parse::<usize>().unwrap() - 1).cloned();
+                let p = self
+                    .people()
+                    .into_iter()
+                    .take(TOP_PEOPLE)
+                    .nth(d.parse::<usize>().unwrap() - 1);
                 if p.is_some() {
                     self.set_assignee(p)
                 }
@@ -387,6 +394,12 @@ fn nav_item(
         .hover(|s| s.bg(rgb(HOVER)))
         .child(icon(icon_name, 16., if active { TEXT } else { MUTED }))
         .child(div().flex_1().child(label))
+}
+
+const TOP_PEOPLE: usize = 5;
+
+fn short_name(name: &str) -> &str {
+    name.split('@').next().unwrap_or(name)
 }
 
 const COLS: [f32; 4] = [170., 92., 170., 110.];
@@ -602,18 +615,38 @@ impl Render for BetterOdoo {
                 cx.notify()
             })),
         );
-        for (i, p) in people.iter().enumerate() {
+        let (top, rest) = people.split_at(people.len().min(TOP_PEOPLE));
+        let picked_from_rest = self.assignee.as_ref().filter(|a| rest.contains(a));
+        for (i, p) in top.iter().chain(picked_from_rest).enumerate() {
             let who = p.clone();
             chips = chips.child(
                 chip(
                     format!("chip-{i}").into(),
-                    p.clone(),
+                    short_name(p).to_string(),
                     self.assignee.as_ref() == Some(p),
                 )
                 .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
                     this.set_assignee(Some(who.clone()));
                     cx.notify()
                 })),
+            );
+        }
+        if !rest.is_empty() {
+            let was_open = self.people_menu;
+            chips = chips.child(
+                div()
+                    .child(
+                        chip("chip-more".into(), format!("+{} more", rest.len()), false)
+                            .when(was_open, |d| d.bg(rgb(HOVER)))
+                            .on_mouse_down(
+                                MouseButton::Left,
+                                cx.listener(move |this, _: &MouseDownEvent, _, cx| {
+                                    this.people_menu = !was_open;
+                                    cx.notify()
+                                }),
+                            ),
+                    )
+                    .when(was_open, |d| d.child(self.people_menu(rest, cx))),
             );
         }
 
@@ -726,7 +759,10 @@ impl Render for BetterOdoo {
                     .text_color(rgb(MUTED))
                     .child(key("j k".into(), "move"))
                     .child(key("↵".into(), "open"))
-                    .child(key(format!("1–{}", people.len().clamp(1, 9)), "assignee"))
+                    .child(key(
+                        format!("1–{}", people.len().clamp(1, TOP_PEOPLE)),
+                        "assignee",
+                    ))
                     .child(key("s".into(), "AI sub-tasks")),
             );
 
@@ -755,6 +791,117 @@ impl Render for BetterOdoo {
 }
 
 impl BetterOdoo {
+    fn people_menu(&self, rest: &[String], cx: &mut Context<Self>) -> impl IntoElement {
+        let counts: HashMap<&String, usize> = rest
+            .iter()
+            .map(|p| {
+                (
+                    p,
+                    self.tasks
+                        .iter()
+                        .filter(|t| t.assignees.contains(p))
+                        .count(),
+                )
+            })
+            .collect();
+        let items = rest.iter().enumerate().map(|(i, p)| {
+            let on = self.assignee.as_ref() == Some(p);
+            let tone = PEOPLE[(i + TOP_PEOPLE) % PEOPLE.len()];
+            let who = p.clone();
+            div()
+                .id(("person", i))
+                .flex()
+                .items_center()
+                .gap(px(10.))
+                .px(px(8.))
+                .py(px(6.))
+                .rounded(px(6.))
+                .cursor_pointer()
+                .hover(|s| s.bg(rgb(HOVER)))
+                .when(on, |d| d.bg(rgb(HOVER)))
+                .child(
+                    div()
+                        .flex_none()
+                        .size(px(22.))
+                        .rounded_full()
+                        .bg(rgb(tone.bg))
+                        .text_color(rgb(tone.fg))
+                        .text_size(px(11.))
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .child(p.chars().next().unwrap_or('?').to_uppercase().to_string()),
+                )
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .truncate()
+                        .child(short_name(p).to_string()),
+                )
+                .child(
+                    div()
+                        .text_size(px(12.))
+                        .text_color(rgb(MUTED))
+                        .child(counts.get(p).copied().unwrap_or(0).to_string()),
+                )
+                .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                    this.set_assignee(Some(who.clone()));
+                    this.people_menu = false;
+                    cx.notify()
+                }))
+        });
+        deferred(
+            anchored()
+                .snap_to_window()
+                .offset(point(px(0.), px(6.)))
+                .child(
+                    div()
+                        .id("people-menu")
+                        .occlude()
+                        .w(px(280.))
+                        .max_h(px(340.))
+                        .overflow_y_scroll()
+                        .p(px(6.))
+                        .rounded(px(8.))
+                        .bg(rgb(PAGE))
+                        .text_size(px(14.))
+                        .text_color(rgb(TEXT))
+                        .font_family(FONT)
+                        .shadow(vec![
+                            BoxShadow {
+                                color: black().opacity(0.05),
+                                offset: point(px(0.), px(0.)),
+                                blur_radius: px(0.),
+                                spread_radius: px(1.),
+                                inset: false,
+                            },
+                            BoxShadow {
+                                color: black().opacity(0.1),
+                                offset: point(px(0.), px(3.)),
+                                blur_radius: px(6.),
+                                spread_radius: px(0.),
+                                inset: false,
+                            },
+                            BoxShadow {
+                                color: black().opacity(0.2),
+                                offset: point(px(0.), px(9.)),
+                                blur_radius: px(24.),
+                                spread_radius: px(0.),
+                                inset: false,
+                            },
+                        ])
+                        .on_mouse_down_out(cx.listener(|this, _: &MouseDownEvent, _, cx| {
+                            this.people_menu = false;
+                            cx.notify()
+                        }))
+                        .children(items),
+                ),
+        )
+        .with_priority(1)
+    }
+
     fn render_rows(&mut self, range: Range<usize>, cx: &mut Context<Self>) -> Vec<Stateful<Div>> {
         let visible: Vec<Task> = self.visible(cx).into_iter().cloned().collect();
         let people = self.people();
