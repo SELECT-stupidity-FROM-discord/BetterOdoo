@@ -8,29 +8,37 @@ use gpui::{
 #[derive(IntoElement)]
 pub struct NavItem {
     id: ElementId,
-    icon: &'static str,
+    icon: Option<&'static str>,
+    dot: Option<u32>,
     label: SharedString,
     active: bool,
     trailing: Vec<AnyElement>,
-    on_click: Option<Box<dyn Fn(&ClickEvent, &mut Window, &mut App)>>,
-    on_press: Option<Box<dyn Fn(&MouseDownEvent, &mut Window, &mut App)>>,
+    on_click: Option<super::OnClick>,
+    on_press: Option<super::OnPress>,
 }
 
 impl NavItem {
-    pub fn new(
-        id: impl Into<ElementId>,
-        icon: &'static str,
-        label: impl Into<SharedString>,
-    ) -> Self {
+    pub fn new(id: impl Into<ElementId>, label: impl Into<SharedString>) -> Self {
         Self {
             id: id.into(),
-            icon,
+            icon: None,
+            dot: None,
             label: label.into(),
             active: false,
             trailing: Vec::new(),
             on_click: None,
             on_press: None,
         }
+    }
+
+    pub fn icon(mut self, name: &'static str) -> Self {
+        self.icon = Some(name);
+        self
+    }
+
+    pub fn dot(mut self, color: u32) -> Self {
+        self.dot = Some(color);
+        self
     }
 
     pub fn active(mut self, active: bool) -> Self {
@@ -73,7 +81,14 @@ impl RenderOnce for NavItem {
             .text_color(rgb(if on { TEXT } else { TEXT_SOFT }))
             .when(on, |d| d.bg(rgb(HOVER)).font_weight(FontWeight::MEDIUM))
             .hover(|s| s.bg(rgb(HOVER)))
-            .child(icon(self.icon, 16., if on { TEXT } else { MUTED }))
+            .children(
+                self.icon
+                    .map(|name| icon(name, 16., if on { TEXT } else { MUTED })),
+            )
+            .children(
+                self.dot
+                    .map(|c| div().flex_none().size(px(8.)).rounded(px(2.)).bg(rgb(c))),
+            )
             .child(div().flex_1().truncate().child(self.label))
             .children(self.trailing)
             .when_some(self.on_click, |d, f| d.on_click(f))
@@ -87,7 +102,7 @@ pub struct ColumnHeader {
     label: SharedString,
     active: bool,
     open: bool,
-    on_press: Option<Box<dyn Fn(&MouseDownEvent, &mut Window, &mut App)>>,
+    on_press: Option<super::OnPress>,
 }
 
 impl ColumnHeader {
@@ -142,6 +157,53 @@ impl RenderOnce for ColumnHeader {
                 13.,
                 if self.active { ACCENT } else { MUTED },
             ))
+            .when_some(self.on_press, |d, f| d.on_mouse_down(MouseButton::Left, f))
+    }
+}
+
+#[derive(IntoElement)]
+pub struct IconButton {
+    id: ElementId,
+    icon: &'static str,
+    active: bool,
+    on_press: Option<super::OnPress>,
+}
+
+impl IconButton {
+    pub fn new(id: impl Into<ElementId>, icon: &'static str) -> Self {
+        Self {
+            id: id.into(),
+            icon,
+            active: false,
+            on_press: None,
+        }
+    }
+
+    pub fn active(mut self, active: bool) -> Self {
+        self.active = active;
+        self
+    }
+
+    pub fn on_press(
+        mut self,
+        f: impl Fn(&MouseDownEvent, &mut Window, &mut App) + 'static,
+    ) -> Self {
+        self.on_press = Some(Box::new(f));
+        self
+    }
+}
+
+impl RenderOnce for IconButton {
+    fn render(self, _: &mut Window, _: &mut App) -> impl IntoElement {
+        div()
+            .id(self.id)
+            .flex_none()
+            .p(px(5.))
+            .rounded(px(6.))
+            .cursor_pointer()
+            .when(self.active, |d| d.bg(rgb(HOVER)))
+            .hover(|s| s.bg(rgb(HOVER)))
+            .child(icon(self.icon, 16., MUTED))
             .when_some(self.on_press, |d, f| d.on_mouse_down(MouseButton::Left, f))
     }
 }

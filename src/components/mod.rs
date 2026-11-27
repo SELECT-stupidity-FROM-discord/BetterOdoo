@@ -9,13 +9,13 @@ mod nav;
 mod panel;
 mod tabs;
 
-pub use basics::{icon, kbd, popover, tag};
+pub use basics::{OnClick, OnPress, icon, kbd, popover, tag};
 pub use button::{Button, Variant};
-pub use check::CheckCircle;
+pub use check::{CheckCircle, Radio};
 pub use chip::Chip;
 pub use field::Field;
 pub use floating::{Floating, MenuHeader, MenuRow};
 pub use misc::{Avatar, Property};
-pub use nav::{ColumnHeader, NavItem};
+pub use nav::{ColumnHeader, IconButton, NavItem};
 pub use panel::{Card, Panel, Section, Tint};
 pub use tabs::{Segmented, TabBar};

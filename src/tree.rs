@@ -1,5 +1,6 @@
 use std::collections::{HashMap, HashSet};
 
+#[derive(Clone, Copy)]
 pub struct Row {
     pub idx: usize,
     pub depth: usize,

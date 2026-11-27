@@ -13,8 +13,6 @@ pub enum Variant {
     Danger,
 }
 
-type ClickHandler = Box<dyn Fn(&ClickEvent, &mut Window, &mut App) + 'static>;
-
 #[derive(IntoElement)]
 pub struct Button {
     id: ElementId,
@@ -22,7 +20,8 @@ pub struct Button {
     icon: Option<&'static str>,
     variant: Variant,
     disabled: bool,
-    on_click: Option<ClickHandler>,
+    wide: bool,
+    on_click: Option<super::OnClick>,
 }
 
 impl Button {
@@ -33,6 +32,7 @@ impl Button {
             icon: None,
             variant: Variant::Secondary,
             disabled: false,
+            wide: false,
             on_click: None,
         }
     }
@@ -44,6 +44,11 @@ impl Button {
 
     pub fn icon(mut self, name: &'static str) -> Self {
         self.icon = Some(name);
+        self
+    }
+
+    pub fn wide(mut self) -> Self {
+        self.wide = true;
         self
     }
 
@@ -73,7 +78,9 @@ impl RenderOnce for Button {
             .flex()
             .flex_none()
             .items_center()
+            .justify_center()
             .gap(px(6.))
+            .when(self.wide, |d| d.w_full().min_h(px(40.)))
             .px(px(12.))
             .min_h(px(32.))
             .rounded(px(6.))

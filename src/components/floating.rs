@@ -6,8 +6,6 @@ use gpui::{
     px, rgb,
 };
 
-type Dismiss = Box<dyn Fn(&MouseDownEvent, &mut Window, &mut App)>;
-
 #[derive(IntoElement)]
 pub struct Floating {
     id: ElementId,
@@ -17,7 +15,7 @@ pub struct Floating {
     max_height: Option<f32>,
     padding: f32,
     gap: f32,
-    on_dismiss: Option<Dismiss>,
+    on_dismiss: Option<super::OnPress>,
     children: Vec<AnyElement>,
 }
 
@@ -103,7 +101,7 @@ impl RenderOnce for Floating {
 #[derive(IntoElement)]
 pub struct MenuHeader {
     title: SharedString,
-    on_clear: Option<Box<dyn Fn(&ClickEvent, &mut Window, &mut App)>>,
+    on_clear: Option<super::OnClick>,
 }
 
 impl MenuHeader {
@@ -156,7 +154,7 @@ pub struct MenuRow {
     label: SharedString,
     count: usize,
     selected: bool,
-    on_click: Option<Box<dyn Fn(&ClickEvent, &mut Window, &mut App)>>,
+    on_click: Option<super::OnClick>,
 }
 
 impl MenuRow {

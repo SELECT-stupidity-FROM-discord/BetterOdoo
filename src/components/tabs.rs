@@ -4,12 +4,10 @@ use gpui::{
     px, rgb, white,
 };
 
-type ClickHandler = Box<dyn Fn(&ClickEvent, &mut Window, &mut App)>;
-
 struct Item {
     label: SharedString,
     active: bool,
-    on_click: ClickHandler,
+    on_click: super::OnClick,
 }
 
 #[derive(IntoElement, Default)]

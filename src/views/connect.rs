@@ -1,4 +1,4 @@
-use crate::components::{icon, tag};
+use crate::components::{Button, Field, Variant, icon, tag};
 use crate::input::{InputEvent, TextInput};
 use crate::odoo::{Auth, Login, Odoo, Probe};
 use crate::theme::*;
@@ -8,7 +8,6 @@ use gpui::{
 };
 use std::{sync::Arc, time::Duration};
 
-const FIELD_BORDER: u32 = 0xdcdcd9;
 const RADIO_OFF: u32 = 0x9b9a97;
 
 #[derive(Clone, Copy, PartialEq)]
@@ -218,26 +217,6 @@ impl ConnectView {
         cx.notify();
     }
 
-    fn field(
-        &self,
-        input: &Entity<TextInput>,
-        height: f32,
-        window: &Window,
-        cx: &Context<Self>,
-    ) -> Div {
-        let focused = input.focus_handle(cx).is_focused(window);
-        div()
-            .flex()
-            .items_center()
-            .px(px(12.))
-            .min_h(px(height))
-            .rounded(px(6.))
-            .border_1()
-            .border_color(rgb(if focused { MUTED } else { FIELD_BORDER }))
-            .bg(rgb(PAGE))
-            .child(input.clone())
-    }
-
     fn method_card(&self, i: usize, cx: &mut Context<Self>) -> Stateful<Div> {
         let (method, title, sub) = METHODS[i];
         let on = self.method == method;
@@ -306,7 +285,7 @@ impl ConnectView {
             )
     }
 
-    fn form(&self, window: &Window, cx: &mut Context<Self>) -> Div {
+    fn form(&self, cx: &mut Context<Self>) -> Div {
         let label = |text: &'static str| {
             div()
                 .text_size(px(13.))
@@ -328,16 +307,16 @@ impl ConnectView {
             Method::Password => {
                 form = form
                     .child(label("Email"))
-                    .child(self.field(&self.email, 40., window, cx))
+                    .child(Field::new(&self.email).height(40.))
                     .child(label("Odoo password"))
-                    .child(self.field(&self.password, 40., window, cx))
+                    .child(Field::new(&self.password).height(40.))
                     .child(help("This doesn’t work if you sign in with Google or Microsoft, or if 2FA codes are on. Use a session cookie instead."));
                 "Sign in"
             }
             Method::ApiKey => {
                 form = form
                     .child(label("API key"))
-                    .child(self.field(&self.api_key, 40., window, cx))
+                    .child(Field::new(&self.api_key).height(40.))
                     .child(help("Odoo 19 or newer. In Odoo: your avatar → Preferences → Account Security → New API key. Creating a key asks for your password, so SSO-only accounts may not be able to make one."));
                 "Connect"
             }
@@ -366,7 +345,7 @@ impl ConnectView {
                             )),
                     )
                     .child(label("session_id"))
-                    .child(self.field(&self.cookie, 40., window, cx))
+                    .child(Field::new(&self.cookie).height(40.))
                     .child(help("Works with any sign-in. Lasts until you log out or it expires, then you paste a new one."));
                 "Connect"
             }
@@ -375,28 +354,17 @@ impl ConnectView {
             d.child(div().text_size(px(13.)).text_color(rgb(DANGER)).child(e))
         })
         .child(
-            div()
-                .id("submit")
-                .flex()
-                .items_center()
-                .justify_center()
-                .px(px(16.))
-                .py(px(10.))
-                .min_h(px(42.))
-                .rounded(px(6.))
-                .bg(rgb(ACCENT))
-                .text_color(rgb(PAGE))
-                .font_weight(FontWeight::MEDIUM)
-                .cursor_pointer()
-                .when(self.busy, |d| d.opacity(0.7))
-                .child(if self.busy { "Connecting…" } else { action })
+            Button::new("submit", if self.busy { "Connecting…" } else { action })
+                .variant(Variant::Primary)
+                .wide()
+                .disabled(self.busy)
                 .on_click(cx.listener(|this, _: &ClickEvent, window, cx| this.submit(window, cx))),
         )
     }
 }
 
 impl Render for ConnectView {
-    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let status = match &self.check {
             Check::Idle => div(),
             Check::Checking => div().text_color(rgb(MUTED)).child("Checking…"),
@@ -464,7 +432,7 @@ impl Render for ConnectView {
                                     .font_weight(FontWeight::MEDIUM)
                                     .child("Odoo address"),
                             )
-                            .child(self.field(&self.address, 42., window, cx))
+                            .child(Field::new(&self.address).height(42.))
                             .child(status.text_size(px(12.))),
                     )
                     .child(
@@ -474,7 +442,7 @@ impl Render for ConnectView {
                             .gap(px(8.))
                             .children(cards),
                     )
-                    .child(self.form(window, cx))
+                    .child(self.form(cx))
                     .child(
                         div()
                             .flex()

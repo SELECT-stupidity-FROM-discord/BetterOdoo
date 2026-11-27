@@ -1,8 +1,12 @@
 use crate::theme::Tone;
 use crate::theme::{BORDER, FONT, PAGE, SIDEBAR, TEXT, TEXT_SOFT};
 use gpui::{
-    BoxShadow, Div, FontWeight, SharedString, Svg, black, div, point, prelude::*, px, rgb, svg,
+    App, BoxShadow, ClickEvent, Div, FontWeight, MouseDownEvent, SharedString, Svg, Window, black,
+    div, point, prelude::*, px, rgb, svg,
 };
+
+pub type OnClick = Box<dyn Fn(&ClickEvent, &mut Window, &mut App)>;
+pub type OnPress = Box<dyn Fn(&MouseDownEvent, &mut Window, &mut App)>;
 
 pub fn icon(name: &str, size: f32, color: u32) -> Svg {
     svg()

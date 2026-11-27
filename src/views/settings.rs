@@ -1,11 +1,11 @@
-use crate::components::{icon, tag};
+use crate::components::{Button, Card, Field, Panel, Radio, Section, Tint, Variant, icon, tag};
 use crate::input::{InputEvent, TextInput};
 use crate::ollama::{self, Model};
 use crate::settings;
 use crate::theme::*;
 use gpui::{
-    ClickEvent, Context, Div, Entity, EventEmitter, FontWeight, SharedString, Stateful, Window,
-    div, prelude::*, px, rgb, white,
+    ClickEvent, Context, Entity, EventEmitter, FontWeight, SharedString, Window, div, prelude::*,
+    px, rgb,
 };
 use std::{
     sync::{Arc, Mutex},
@@ -182,51 +182,7 @@ impl SettingsView {
         .detach();
     }
 
-    fn section(title: &'static str, note: impl Into<SharedString>) -> Div {
-        div()
-            .flex()
-            .flex_col()
-            .gap(px(2.))
-            .child(
-                div()
-                    .text_size(px(18.))
-                    .font_weight(FontWeight::SEMIBOLD)
-                    .child(title),
-            )
-            .child(div().text_color(rgb(MUTED)).child(note.into()))
-    }
-
-    fn card() -> Div {
-        div()
-            .flex()
-            .flex_col()
-            .rounded(px(8.))
-            .border_1()
-            .border_color(rgb(BORDER))
-            .overflow_hidden()
-    }
-
-    fn button(id: impl Into<SharedString>, label: &str, primary: bool) -> Stateful<Div> {
-        div()
-            .id(id.into())
-            .flex_none()
-            .px(px(12.))
-            .py(px(6.))
-            .rounded(px(6.))
-            .cursor_pointer()
-            .text_size(px(13.))
-            .font_weight(FontWeight::MEDIUM)
-            .when(primary, |d| d.bg(rgb(ACCENT)).text_color(white()))
-            .when(!primary, |d| {
-                d.border_1()
-                    .border_color(rgb(BORDER))
-                    .text_color(rgb(TEXT_SOFT))
-                    .hover(|s| s.bg(rgb(HOVER)))
-            })
-            .child(label.to_string())
-    }
-
-    fn account(&self, cx: &mut Context<Self>) -> Div {
+    fn account(&self, cx: &mut Context<Self>) -> Panel {
         let row = |label: &'static str, value: SharedString| {
             div()
                 .flex()
@@ -239,7 +195,7 @@ impl SettingsView {
                 .child(div().text_color(rgb(MUTED)).child(label))
                 .child(value)
         };
-        Self::card()
+        Panel::new()
             .child(row("Workspace", self.workspace.clone()))
             .child(row("Server", self.server.clone()))
             .child(
@@ -255,8 +211,8 @@ impl SettingsView {
                             .child("Forget this login and return to the Connect screen"),
                     )
                     .child(
-                        Self::button("sign-out", "Sign out", false)
-                            .text_color(rgb(DANGER))
+                        Button::new("sign-out", "Sign out")
+                            .variant(Variant::Danger)
                             .on_click(cx.listener(|_, _: &ClickEvent, _, cx| {
                                 cx.emit(SettingsEvent::SignOut)
                             })),
@@ -264,176 +220,143 @@ impl SettingsView {
             )
     }
 
-    fn installed(&self, cx: &mut Context<Self>) -> Div {
+    fn installed(&self, cx: &mut Context<Self>) -> Panel {
+        let note = |text: &'static str| div().p(px(14.)).text_color(rgb(MUTED)).child(text);
         match &self.library {
-            Library::Loading => Self::card()
-                .p(px(14.))
-                .text_color(rgb(MUTED))
-                .child("Looking for models…"),
-            Library::Unreachable(msg) => {
-                Self::card()
-                    .p(px(14.))
+            Library::Loading => Panel::new().child(note("Looking for models…")),
+            Library::Unreachable(msg) => Panel::new().child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .items_start()
                     .gap(px(8.))
+                    .p(px(14.))
                     .child(div().text_color(rgb(DANGER)).child(msg.clone()))
                     .child(
                         div()
                             .text_color(rgb(MUTED))
                             .child("Install Ollama from ollama.com and start it, then try again."),
                     )
-                    .child(
-                        div()
-                            .flex()
-                            .child(Self::button("retry", "Try again", false).on_click(
-                                cx.listener(|this, _: &ClickEvent, _, cx| {
-                                    this.library = Library::Loading;
-                                    this.refresh(cx);
-                                    cx.notify()
-                                }),
-                            )),
-                    )
+                    .child(Button::new("retry", "Try again").on_click(cx.listener(
+                        |this, _: &ClickEvent, _, cx| {
+                            this.library = Library::Loading;
+                            this.refresh(cx);
+                            cx.notify()
+                        },
+                    ))),
+            ),
+            Library::Ready(models) if models.is_empty() => {
+                Panel::new().child(note("No models downloaded yet. Pick one below."))
             }
-            Library::Ready(models) if models.is_empty() => Self::card()
-                .p(px(14.))
-                .text_color(rgb(MUTED))
-                .child("No models downloaded yet. Pick one below."),
             Library::Ready(models) => {
-                let mut card = Self::card();
-                for (i, m) in models.iter().enumerate() {
+                let rows = models.iter().enumerate().map(|(i, m)| {
                     let on = m.name == self.active;
                     let name = m.name.clone();
-                    card = card.child(
-                        div()
-                            .id(("model", i))
-                            .flex()
-                            .items_center()
-                            .gap(px(12.))
-                            .px(px(14.))
-                            .py(px(10.))
-                            .cursor_pointer()
-                            .hover(|s| s.bg(rgb(HOVER)))
-                            .when(i + 1 < models.len(), |d| {
-                                d.border_b_1().border_color(rgb(ROW_RULE))
-                            })
-                            .child(
-                                div()
-                                    .flex_none()
-                                    .size(px(16.))
-                                    .rounded_full()
-                                    .border_1()
-                                    .border_color(rgb(if on { PURPLE.fg } else { MUTED }))
-                                    .flex()
-                                    .items_center()
-                                    .justify_center()
-                                    .when(on, |d| {
-                                        d.child(
-                                            div().size(px(8.)).rounded_full().bg(rgb(PURPLE.fg)),
-                                        )
-                                    }),
-                            )
-                            .child(div().flex_1().min_w_0().truncate().child(m.name.clone()))
-                            .when(on, |d| d.child(tag("Active", PURPLE, 11.)))
-                            .child(
-                                div()
-                                    .flex_none()
-                                    .text_size(px(12.))
-                                    .text_color(rgb(MUTED))
-                                    .child(ollama::size_label(m.size)),
-                            )
-                            .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
-                                this.choose(&name, cx)
-                            })),
-                    );
-                }
-                card
+                    div()
+                        .id(("model", i))
+                        .flex()
+                        .items_center()
+                        .gap(px(12.))
+                        .px(px(14.))
+                        .py(px(10.))
+                        .cursor_pointer()
+                        .hover(|s| s.bg(rgb(HOVER)))
+                        .when(i + 1 < models.len(), |d| {
+                            d.border_b_1().border_color(rgb(ROW_RULE))
+                        })
+                        .child(Radio::new(on))
+                        .child(div().flex_1().min_w_0().truncate().child(m.name.clone()))
+                        .when(on, |d| d.child(tag("Active", PURPLE, 11.)))
+                        .child(
+                            div()
+                                .flex_none()
+                                .text_size(px(12.))
+                                .text_color(rgb(MUTED))
+                                .child(ollama::size_label(m.size)),
+                        )
+                        .on_click(
+                            cx.listener(move |this, _: &ClickEvent, _, cx| this.choose(&name, cx)),
+                        )
+                });
+                Panel::new().children(rows.collect::<Vec<_>>())
             }
         }
     }
 
-    fn catalogue(&self, cx: &mut Context<Self>) -> Div {
+    fn catalogue(&self, cx: &mut Context<Self>) -> Panel {
         let have: Vec<&str> = match &self.library {
             Library::Ready(m) => m.iter().map(|m| m.name.as_str()).collect(),
             _ => Vec::new(),
         };
         let busy = self.pulling.is_some();
-        let mut card = Self::card();
-        for (i, (name, note)) in SUGGESTED.iter().enumerate() {
+        let rows = SUGGESTED.iter().enumerate().map(|(i, (name, note))| {
             let owned = have
                 .iter()
                 .any(|h| h == name || h.strip_suffix(":latest") == Some(name));
             let progress = self.pulling.as_ref().filter(|(n, _, _)| n == name);
             let target = name.to_string();
-            card = card.child(
-                div()
+            let action = match (owned, progress) {
+                (_, Some((_, _, f))) => div()
+                    .text_size(px(12.))
+                    .text_color(rgb(PURPLE.fg))
+                    .child(format!("{}%", (f * 100.) as u32)),
+                (true, _) => div()
                     .flex()
                     .items_center()
-                    .gap(px(12.))
-                    .px(px(14.))
-                    .py(px(10.))
-                    .border_b_1()
-                    .border_color(rgb(ROW_RULE))
-                    .child(
-                        div()
-                            .flex_1()
-                            .min_w_0()
-                            .flex()
-                            .flex_col()
-                            .child(div().child(name.to_string()))
-                            .child(
-                                div()
-                                    .text_size(px(12.))
-                                    .text_color(rgb(MUTED))
-                                    .child(note.to_string()),
-                            ),
-                    )
-                    .child(match (owned, progress) {
-                        (_, Some((_, _, f))) => div()
-                            .text_size(px(12.))
-                            .text_color(rgb(PURPLE.fg))
-                            .child(format!("{}%", (f * 100.) as u32)),
-                        (true, _) => div()
-                            .flex()
-                            .items_center()
-                            .gap(px(4.))
-                            .text_size(px(12.))
-                            .text_color(rgb(SUCCESS))
-                            .child(icon("check", 12., SUCCESS))
-                            .child("Installed"),
-                        (false, _) => div().child(
-                            Self::button(format!("get-{i}"), "Download", false)
-                                .when(busy, |d| d.opacity(0.5))
-                                .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
-                                    this.download(target.clone(), cx)
-                                })),
+                    .gap(px(4.))
+                    .text_size(px(12.))
+                    .text_color(rgb(SUCCESS))
+                    .child(icon("check", 12., SUCCESS))
+                    .child("Installed"),
+                (false, _) => {
+                    div().child(Button::new(("get", i), "Download").disabled(busy).on_click(
+                        cx.listener(move |this, _: &ClickEvent, _, cx| {
+                            this.download(target.clone(), cx)
+                        }),
+                    ))
+                }
+            };
+            div()
+                .flex()
+                .items_center()
+                .gap(px(12.))
+                .px(px(14.))
+                .py(px(10.))
+                .border_b_1()
+                .border_color(rgb(ROW_RULE))
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .flex()
+                        .flex_col()
+                        .child(div().child(name.to_string()))
+                        .child(
+                            div()
+                                .text_size(px(12.))
+                                .text_color(rgb(MUTED))
+                                .child(note.to_string()),
                         ),
-                    }),
-            );
-        }
-        card.child(self.custom_row(cx))
+                )
+                .child(action)
+        });
+        Panel::new()
+            .children(rows.collect::<Vec<_>>())
+            .child(self.custom_row(busy, cx))
     }
 
-    fn custom_row(&self, cx: &mut Context<Self>) -> Div {
-        let busy = self.pulling.is_some();
+    fn custom_row(&self, busy: bool, cx: &mut Context<Self>) -> impl IntoElement {
         div()
             .flex()
             .items_center()
             .gap(px(10.))
             .px(px(14.))
             .py(px(10.))
+            .child(div().flex_1().child(Field::new(&self.custom)))
             .child(
-                div()
-                    .flex_1()
-                    .px(px(10.))
-                    .min_h(px(32.))
-                    .flex()
-                    .items_center()
-                    .rounded(px(6.))
-                    .border_1()
-                    .border_color(rgb(BORDER))
-                    .child(self.custom.clone()),
-            )
-            .child(
-                Self::button("get-custom", "Download", true)
-                    .when(busy, |d| d.opacity(0.5))
+                Button::new("get-custom", "Download")
+                    .variant(Variant::Primary)
+                    .disabled(busy)
                     .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
                         let name = this.custom.read(cx).text().trim().to_string();
                         this.download(name, cx)
@@ -441,29 +364,12 @@ impl SettingsView {
             )
     }
 
-    fn progress(&self) -> Option<Div> {
+    fn progress(&self) -> Option<Card> {
         let (name, status, fraction) = self.pulling.as_ref()?;
+        let percent = format!("{}%", (fraction * 100.) as u32);
         Some(
-            div()
-                .flex()
-                .flex_col()
-                .gap(px(8.))
-                .p(px(14.))
-                .rounded(px(8.))
-                .bg(rgb(PURPLE.bg))
-                .child(
-                    div()
-                        .flex()
-                        .justify_between()
-                        .text_size(px(13.))
-                        .text_color(rgb(PURPLE.fg))
-                        .child(
-                            div()
-                                .font_weight(FontWeight::MEDIUM)
-                                .child(format!("Downloading {name}")),
-                        )
-                        .child(format!("{}%", (fraction * 100.) as u32)),
-                )
+            Card::new(format!("Downloading {name} · {percent}"))
+                .tint(Tint::Ai)
                 .child(
                     div().h(px(6.)).rounded_full().bg(rgb(AI_BORDER)).child(
                         div()
@@ -485,6 +391,12 @@ impl SettingsView {
 
 impl Render for SettingsView {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let notice = self.notice.clone().map(|(msg, bad)| {
+            div()
+                .text_size(px(13.))
+                .text_color(rgb(if bad { DANGER } else { SUCCESS }))
+                .child(msg)
+        });
         div()
             .id("settings")
             .flex_1()
@@ -530,41 +442,24 @@ impl Render for SettingsView {
                             .child("Settings"),
                     )
                     .child(
-                        div()
-                            .flex()
-                            .flex_col()
-                            .gap(px(10.))
-                            .child(Self::section("Account", "The Odoo workspace you’re signed in to."))
+                        Section::new("Account", "The Odoo workspace you’re signed in to.")
                             .child(self.account(cx)),
                     )
                     .child(
-                        div()
-                            .flex()
-                            .flex_col()
-                            .gap(px(10.))
-                            .child(Self::section(
-                                "AI model",
-                                "Autofill with AI runs on your computer through Ollama. Choose which model it uses.",
-                            ))
-                            .child(self.installed(cx)),
+                        Section::new(
+                            "AI model",
+                            "Autofill with AI runs on your computer through Ollama. Choose which model it uses.",
+                        )
+                        .child(self.installed(cx)),
                     )
                     .child(
-                        div()
-                            .flex()
-                            .flex_col()
-                            .gap(px(10.))
-                            .child(Self::section(
-                                "Download a model",
-                                "Bigger models read messy notes better but need more memory and time.",
-                            ))
-                            .children(self.progress())
-                            .children(self.notice.clone().map(|(msg, bad)| {
-                                div()
-                                    .text_size(px(13.))
-                                    .text_color(rgb(if bad { DANGER } else { SUCCESS }))
-                                    .child(msg)
-                            }))
-                            .child(self.catalogue(cx)),
+                        Section::new(
+                            "Download a model",
+                            "Bigger models read messy notes better but need more memory and time.",
+                        )
+                        .children(self.progress())
+                        .children(notice)
+                        .child(self.catalogue(cx)),
                     ),
             )
     }

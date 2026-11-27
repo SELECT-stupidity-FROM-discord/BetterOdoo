@@ -10,8 +10,8 @@ pub struct Chip {
     label: SharedString,
     selected: bool,
     open: bool,
-    on_click: Option<Box<dyn Fn(&ClickEvent, &mut Window, &mut App)>>,
-    on_press: Option<Box<dyn Fn(&MouseDownEvent, &mut Window, &mut App)>>,
+    on_click: Option<super::OnClick>,
+    on_press: Option<super::OnPress>,
 }
 
 impl Chip {
