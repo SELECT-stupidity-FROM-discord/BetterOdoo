@@ -48,6 +48,7 @@ struct BetterOdoo {
     hide_done: bool,
     hidden_stages: HashSet<String>,
     stage_menu: bool,
+    people_header_menu: bool,
     today: i64,
     connect: Option<Entity<ConnectView>>,
     rows_scroll: UniformListScrollHandle,
@@ -78,6 +79,7 @@ impl BetterOdoo {
             hide_done: false,
             hidden_stages: HashSet::new(),
             stage_menu: false,
+            people_header_menu: false,
             today: date::today(),
             connect: None,
             rows_scroll: UniformListScrollHandle::new(),
@@ -354,6 +356,7 @@ impl BetterOdoo {
             "escape" if self.people_menu => self.people_menu = false,
             "escape" if self.shortcuts => self.shortcuts = false,
             "escape" if self.stage_menu => self.stage_menu = false,
+            "escape" if self.people_header_menu => self.people_header_menu = false,
             "h" => self.toggle_done(),
             "escape" if !self.proposed.is_empty() => self.proposed.clear(),
             "escape" => self.page = false,
@@ -424,6 +427,42 @@ fn nav_item(
 }
 
 const TOP_PEOPLE: usize = 5;
+
+fn header_cell(id: &'static str, label: &'static str, active: bool, open: bool) -> Stateful<Div> {
+    let color = if active { TEXT } else { MUTED };
+    div()
+        .id(id)
+        .flex()
+        .items_center()
+        .gap(px(4.))
+        .px(px(6.))
+        .py(px(2.))
+        .ml(px(-6.))
+        .rounded(px(4.))
+        .cursor_pointer()
+        .text_color(rgb(color))
+        .when(active, |d| d.font_weight(FontWeight::MEDIUM))
+        .when(open, |d| d.bg(rgb(HOVER)))
+        .hover(|s| s.bg(rgb(HOVER)))
+        .child(label)
+        .when(active, |d| {
+            d.child(div().size(px(5.)).rounded_full().bg(rgb(ACCENT)))
+        })
+        .child(icon("chevron", 12., color))
+}
+
+fn toggle(on: bool) -> Div {
+    div()
+        .flex_none()
+        .w(px(26.))
+        .h(px(15.))
+        .rounded_full()
+        .p(px(2.))
+        .flex()
+        .when(on, |d| d.justify_end())
+        .bg(rgb(if on { ACCENT } else { BORDER }))
+        .child(div().size(px(11.)).rounded_full().bg(rgb(PAGE)))
+}
 
 fn short_name(name: &str) -> &str {
     name.split('@').next().unwrap_or(name)
@@ -708,37 +747,6 @@ impl Render for BetterOdoo {
             .border_color(rgb(BORDER))
             .child(chips)
             .child(div().flex_1())
-            .child({
-                let was_open = self.stage_menu;
-                let label = match self.hidden_stages.len() {
-                    0 => "All stages".to_string(),
-                    n => format!("{n} stage{} hidden", if n == 1 { "" } else { "s" }),
-                };
-                div()
-                    .child(
-                        chip("chip-stages".into(), label, !self.hidden_stages.is_empty())
-                            .when(was_open, |d| d.bg(rgb(HOVER)))
-                            .on_mouse_down(
-                                MouseButton::Left,
-                                cx.listener(move |this, _: &MouseDownEvent, _, cx| {
-                                    this.stage_menu = !was_open;
-                                    cx.notify()
-                                }),
-                            ),
-                    )
-                    .when(was_open, |d| d.child(self.stage_menu(cx)))
-            })
-            .child(
-                chip(
-                    "chip-hide-done".into(),
-                    "Hide completed".into(),
-                    self.hide_done,
-                )
-                .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
-                    this.toggle_done();
-                    cx.notify()
-                })),
-            )
             .child(
                 div()
                     .flex()
@@ -763,12 +771,42 @@ impl Render for BetterOdoo {
             .text_size(px(12.))
             .text_color(rgb(MUTED))
             .child(div().flex_1().min_w(px(160.)).child("Name"))
-            .children(
-                ["Status", "Assignees", "Project", "Due"]
-                    .iter()
-                    .zip(COLS)
-                    .map(|(l, w)| div().flex_none().w(px(w)).child(*l)),
-            );
+            .child({
+                let open = self.stage_menu;
+                let active = self.hide_done || !self.hidden_stages.is_empty();
+                div()
+                    .flex_none()
+                    .w(px(COLS[0]))
+                    .child(
+                        header_cell("h-status", "Status", active, open).on_mouse_down(
+                            MouseButton::Left,
+                            cx.listener(move |this, _: &MouseDownEvent, _, cx| {
+                                this.stage_menu = !open;
+                                cx.notify()
+                            }),
+                        ),
+                    )
+                    .when(open, |d| d.child(self.stage_menu(cx)))
+            })
+            .child({
+                let open = self.people_header_menu;
+                div()
+                    .flex_none()
+                    .w(px(COLS[1]))
+                    .child(
+                        header_cell("h-people", "Assignees", self.assignee.is_some(), open)
+                            .on_mouse_down(
+                                MouseButton::Left,
+                                cx.listener(move |this, _: &MouseDownEvent, _, cx| {
+                                    this.people_header_menu = !open;
+                                    cx.notify()
+                                }),
+                            ),
+                    )
+                    .when(open, |d| d.child(self.people_menu(&people, cx)))
+            })
+            .child(div().flex_none().w(px(COLS[2])).child("Project"))
+            .child(div().flex_none().w(px(COLS[3])).child("Due"));
 
         let main = div()
             .flex()
@@ -972,6 +1010,26 @@ impl BetterOdoo {
                         }))
                         .child(
                             div()
+                                .id("hide-done")
+                                .flex()
+                                .items_center()
+                                .gap(px(10.))
+                                .px(px(8.))
+                                .py(px(6.))
+                                .rounded(px(6.))
+                                .cursor_pointer()
+                                .hover(|s| s.bg(rgb(HOVER)))
+                                .child(toggle(self.hide_done))
+                                .child(div().flex_1().child("Hide completed"))
+                                .child(kbd("h"))
+                                .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                                    this.toggle_done();
+                                    cx.notify()
+                                })),
+                        )
+                        .child(div().h(px(1.)).my(px(4.)).bg(rgb(BORDER)))
+                        .child(
+                            div()
                                 .id("stages-all")
                                 .px(px(8.))
                                 .py(px(6.))
@@ -993,6 +1051,7 @@ impl BetterOdoo {
     }
 
     fn people_menu(&self, rest: &[String], cx: &mut Context<Self>) -> impl IntoElement {
+        let all = self.people();
         let counts: HashMap<&String, usize> = rest
             .iter()
             .map(|p| {
@@ -1007,7 +1066,7 @@ impl BetterOdoo {
             .collect();
         let items = rest.iter().enumerate().map(|(i, p)| {
             let on = self.assignee.as_ref() == Some(p);
-            let tone = PEOPLE[(i + TOP_PEOPLE) % PEOPLE.len()];
+            let tone = PEOPLE[all.iter().position(|x| x == p).unwrap_or(i) % PEOPLE.len()];
             let who = p.clone();
             div()
                 .id(("person", i))
@@ -1050,6 +1109,7 @@ impl BetterOdoo {
                 .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
                     this.set_assignee(Some(who.clone()));
                     this.people_menu = false;
+                    this.people_header_menu = false;
                     cx.notify()
                 }))
         });
@@ -1067,6 +1127,7 @@ impl BetterOdoo {
                         .p(px(6.))
                         .on_mouse_down_out(cx.listener(|this, _: &MouseDownEvent, _, cx| {
                             this.people_menu = false;
+                            this.people_header_menu = false;
                             cx.notify()
                         }))
                         .children(items),
