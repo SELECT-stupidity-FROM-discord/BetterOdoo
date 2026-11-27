@@ -45,6 +45,17 @@ macro_rules! sec {
 
 const CONTEXT: &str = "TextInput";
 
+fn mask_offset(content: &str, offset: usize) -> usize {
+    content[..offset].chars().count() * '•'.len_utf8()
+}
+
+fn unmask_offset(content: &str, offset: usize) -> usize {
+    content
+        .char_indices()
+        .nth(offset / '•'.len_utf8())
+        .map_or(content.len(), |(i, _)| i)
+}
+
 pub fn bind_keys(cx: &mut App) {
     let ctx = Some(CONTEXT);
     cx.bind_keys([
@@ -81,6 +92,7 @@ pub struct TextInput {
     last_layout: Option<ShapedLine>,
     last_bounds: Option<Bounds<Pixels>>,
     is_selecting: bool,
+    masked: bool,
 }
 
 impl EventEmitter<InputEvent> for TextInput {}
@@ -103,11 +115,41 @@ impl TextInput {
             last_layout: None,
             last_bounds: None,
             is_selecting: false,
+            masked: false,
         }
+    }
+
+    pub fn masked(mut self) -> Self {
+        self.masked = true;
+        self
     }
 
     pub fn text(&self) -> &str {
         &self.content
+    }
+
+    fn display_text(&self) -> SharedString {
+        if self.masked {
+            "•".repeat(self.content.chars().count()).into()
+        } else {
+            self.content.clone()
+        }
+    }
+
+    fn display_offset(&self, offset: usize) -> usize {
+        if self.masked {
+            mask_offset(&self.content, offset)
+        } else {
+            offset
+        }
+    }
+
+    fn content_offset(&self, offset: usize) -> usize {
+        if self.masked {
+            unmask_offset(&self.content, offset)
+        } else {
+            offset
+        }
     }
 
     pub fn clear(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -205,7 +247,7 @@ impl TextInput {
     }
 
     fn copy(&mut self, _: &Copy, _: &mut Window, cx: &mut Context<Self>) {
-        if !self.selected_range.is_empty() {
+        if !self.selected_range.is_empty() && !self.masked {
             cx.write_to_clipboard(ClipboardItem::new_string(
                 self.content[self.selected_range.clone()].to_string(),
             ));
@@ -213,7 +255,7 @@ impl TextInput {
     }
 
     fn cut(&mut self, _: &Cut, window: &mut Window, cx: &mut Context<Self>) {
-        if !self.selected_range.is_empty() {
+        if !self.selected_range.is_empty() && !self.masked {
             self.copy(&Copy, window, cx);
             self.replace_text_in_range(None, "", window, cx)
         }
@@ -245,7 +287,7 @@ impl TextInput {
         if position.y > bounds.bottom() {
             return self.content.len();
         }
-        line.closest_index_for_x(position.x - bounds.left())
+        self.content_offset(line.closest_index_for_x(position.x - bounds.left()))
     }
 
     fn select_to(&mut self, offset: usize, window: &Window, cx: &mut Context<Self>) {
@@ -425,17 +467,17 @@ impl EntityInputHandler for TextInput {
         _: &mut Context<Self>,
     ) -> Option<Bounds<Pixels>> {
         let layout = self.last_layout.as_ref()?;
-        if layout.text != self.content {
+        if layout.text != self.display_text() {
             return None;
         }
         let range = self.range_from_utf16(&range_utf16);
         Some(Bounds::from_corners(
             point(
-                bounds.left() + layout.x_for_index(range.start),
+                bounds.left() + layout.x_for_index(self.display_offset(range.start)),
                 bounds.top(),
             ),
             point(
-                bounds.left() + layout.x_for_index(range.end),
+                bounds.left() + layout.x_for_index(self.display_offset(range.end)),
                 bounds.bottom(),
             ),
         ))
@@ -461,10 +503,11 @@ impl EntityInputHandler for TextInput {
     ) -> Option<usize> {
         let local = self.last_bounds?.localize(&point)?;
         let layout = self.last_layout.as_ref()?;
-        if layout.text != self.content {
+        if layout.text != self.display_text() {
             return None;
         }
-        Some(self.offset_to_utf16(layout.closest_index_for_x(local.x)))
+        let index = self.content_offset(layout.closest_index_for_x(local.x));
+        Some(self.offset_to_utf16(index))
     }
 }
 
@@ -517,7 +560,7 @@ impl Element for TextElement {
         let (text, color) = if input.content.is_empty() {
             (input.placeholder.clone(), rgb(theme::MUTED).into())
         } else {
-            (input.content.clone(), style.color)
+            (input.display_text(), style.color)
         };
         let run = TextRun {
             len: text.len(),
@@ -527,7 +570,11 @@ impl Element for TextElement {
             underline: None,
             strikethrough: None,
         };
-        let runs = match input.marked_range.as_ref() {
+        let marked = input
+            .marked_range
+            .as_ref()
+            .map(|m| input.display_offset(m.start)..input.display_offset(m.end));
+        let runs = match marked.as_ref() {
             Some(m) => [
                 TextRun {
                     len: m.start,
@@ -558,7 +605,7 @@ impl Element for TextElement {
             .shape_line(text, font_size, &runs, None);
         let sel = input.selected_range.clone();
         let (selection, cursor) = if sel.is_empty() {
-            let x = line.x_for_index(input.cursor_offset());
+            let x = line.x_for_index(input.display_offset(input.cursor_offset()));
             let caret = Bounds::new(
                 point(bounds.left() + x, bounds.top()),
                 size(px(1.5), bounds.size.height),
@@ -566,8 +613,14 @@ impl Element for TextElement {
             (None, Some(fill(caret, rgb(theme::TEXT))))
         } else {
             let area = Bounds::from_corners(
-                point(bounds.left() + line.x_for_index(sel.start), bounds.top()),
-                point(bounds.left() + line.x_for_index(sel.end), bounds.bottom()),
+                point(
+                    bounds.left() + line.x_for_index(input.display_offset(sel.start)),
+                    bounds.top(),
+                ),
+                point(
+                    bounds.left() + line.x_for_index(input.display_offset(sel.end)),
+                    bounds.bottom(),
+                ),
             );
             (Some(fill(area, rgba(theme::SELECTION))), None)
         };
@@ -646,5 +699,20 @@ impl Render for TextInput {
             .on_mouse_up_out(MouseButton::Left, cx.listener(Self::on_mouse_up))
             .on_mouse_move(cx.listener(Self::on_mouse_move))
             .child(TextElement { input: cx.entity() })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn mask_offsets_round_trip() {
+        let s = "aé🙂z";
+        for (i, _) in s.char_indices().chain([(s.len(), ' ')]) {
+            assert_eq!(unmask_offset(s, mask_offset(s, i)), i);
+        }
+        assert_eq!(mask_offset(s, s.len()), 4 * '•'.len_utf8());
+        assert_eq!(unmask_offset(s, 999), s.len());
     }
 }
