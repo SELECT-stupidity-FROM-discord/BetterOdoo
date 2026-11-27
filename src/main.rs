@@ -6,6 +6,7 @@ mod input;
 mod odoo;
 mod ollama;
 mod settings;
+mod settings_view;
 mod theme;
 mod ui;
 
@@ -19,6 +20,7 @@ use gpui::{
 use input::{InputEvent, TextInput};
 use odoo::{Login, Odoo, SubTask, Task, WorkItem};
 use serde_json::json;
+use settings_view::{SettingsEvent, SettingsView};
 use std::{
     collections::{HashMap, HashSet},
     ops::Range,
@@ -50,7 +52,7 @@ struct BetterOdoo {
     page: bool,
     people_menu: bool,
     shortcuts: bool,
-    settings: bool,
+    settings: Option<Entity<SettingsView>>,
     stage_filter: HashSet<String>,
     stage_menu: bool,
     people_header_menu: bool,
@@ -84,7 +86,7 @@ impl BetterOdoo {
             page: false,
             people_menu: false,
             shortcuts: false,
-            settings: false,
+            settings: None,
             stage_filter: HashSet::new(),
             stage_menu: false,
             people_header_menu: false,
@@ -405,6 +407,12 @@ impl BetterOdoo {
         if !self.focus.is_focused(window) {
             return;
         }
+        if self.settings.is_some() {
+            if ev.keystroke.key == "escape" {
+                self.close_settings(window, cx);
+            }
+            return;
+        }
         let n = self.visible(cx).len();
         let secondary = ev.keystroke.modifiers.secondary(cx);
         if ev.keystroke.key_char.as_deref() == Some("?") {
@@ -427,10 +435,7 @@ impl BetterOdoo {
             "enter" if !self.proposed.is_empty() => self.commit_work(cx),
             "enter" if n > 0 => self.page = true,
             "escape" if self.people_menu => self.people_menu = false,
-            "escape" if self.shortcuts || self.settings => {
-                self.shortcuts = false;
-                self.settings = false
-            }
+            "escape" if self.shortcuts => self.shortcuts = false,
             "escape" if self.stage_menu => self.stage_menu = false,
             "escape" if self.people_header_menu => self.people_header_menu = false,
             "escape" if !self.proposed.is_empty() => self.proposed.clear(),
@@ -705,6 +710,7 @@ impl Render for BetterOdoo {
                 .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
                     this.project = None;
                     this.page = false;
+                    this.settings = None;
                     this.selected = 0;
                     cx.notify()
                 })),
@@ -760,6 +766,7 @@ impl Render for BetterOdoo {
                     .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
                         this.project = Some(name.clone());
                         this.page = false;
+                        this.settings = None;
                         this.selected = 0;
                         this.rows_scroll.scroll_to_item(0, ScrollStrategy::Top);
                         this.reset_ai();
@@ -769,7 +776,7 @@ impl Render for BetterOdoo {
         }
         let synced = self.odoo.is_some() && self.status.as_ref() == "Synced just now";
         let was_open = self.shortcuts;
-        let settings_open = self.settings;
+        let settings_open = self.settings.is_some();
         sidebar = sidebar
             .child(project_list)
             .child(
@@ -781,7 +788,6 @@ impl Render for BetterOdoo {
                                 MouseButton::Left,
                                 cx.listener(move |this, _: &MouseDownEvent, _, cx| {
                                     this.shortcuts = !was_open;
-                                    this.settings = false;
                                     cx.notify()
                                 }),
                             ),
@@ -792,49 +798,48 @@ impl Render for BetterOdoo {
             )
             .child(
                 div()
+                    .flex()
+                    .items_center()
+                    .gap(px(8.))
+                    .p(px(10.))
+                    .text_size(px(12.))
+                    .text_color(rgb(MUTED))
                     .child(
                         div()
-                            .flex()
-                            .items_center()
-                            .gap(px(8.))
-                            .p(px(10.))
-                            .text_size(px(12.))
-                            .text_color(rgb(MUTED))
-                            .child(
-                                div()
-                                    .flex_none()
-                                    .size(px(6.))
-                                    .rounded_full()
-                                    .bg(rgb(if synced { SUCCESS } else { MUTED })),
-                            )
-                            .child(
-                                div()
-                                    .flex_1()
-                                    .min_w_0()
-                                    .truncate()
-                                    .child(self.status.clone()),
-                            )
-                            .child(
-                                div()
-                                    .id("cog")
-                                    .flex_none()
-                                    .p(px(5.))
-                                    .rounded(px(6.))
-                                    .cursor_pointer()
-                                    .when(settings_open, |d| d.bg(rgb(HOVER)))
-                                    .hover(|s| s.bg(rgb(HOVER)))
-                                    .child(icon("cog", 16., MUTED))
-                                    .on_mouse_down(
-                                        MouseButton::Left,
-                                        cx.listener(move |this, _: &MouseDownEvent, _, cx| {
-                                            this.settings = !settings_open;
-                                            this.shortcuts = false;
-                                            cx.notify()
-                                        }),
-                                    ),
-                            ),
+                            .flex_none()
+                            .size(px(6.))
+                            .rounded_full()
+                            .bg(rgb(if synced { SUCCESS } else { MUTED })),
                     )
-                    .when(settings_open, |d| d.child(self.settings_popover(cx))),
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .truncate()
+                            .child(self.status.clone()),
+                    )
+                    .child(
+                        div()
+                            .id("cog")
+                            .flex_none()
+                            .p(px(5.))
+                            .rounded(px(6.))
+                            .cursor_pointer()
+                            .when(settings_open, |d| d.bg(rgb(HOVER)))
+                            .hover(|s| s.bg(rgb(HOVER)))
+                            .child(icon("cog", 16., MUTED))
+                            .on_mouse_down(
+                                MouseButton::Left,
+                                cx.listener(move |this, _: &MouseDownEvent, window, cx| {
+                                    this.shortcuts = false;
+                                    if settings_open {
+                                        this.close_settings(window, cx);
+                                    } else {
+                                        this.open_settings(window, cx);
+                                    }
+                                }),
+                            ),
+                    ),
             );
 
         let chip = |id: SharedString, label: String, on: bool| {
@@ -1018,9 +1023,10 @@ impl Render for BetterOdoo {
         if let Some(id) = selected.map(|t| t.id) {
             self.ensure_subtasks(id, cx);
         }
-        let content = match selected {
-            Some(t) => self.detail(t, window, cx).into_any_element(),
-            None => main.into_any_element(),
+        let content = match (&self.settings, selected) {
+            (Some(view), _) => view.clone().into_any_element(),
+            (None, Some(t)) => self.detail(t, window, cx).into_any_element(),
+            (None, None) => main.into_any_element(),
         };
 
         div()
@@ -1039,65 +1045,32 @@ impl Render for BetterOdoo {
 }
 
 impl BetterOdoo {
-    fn settings_popover(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let row = |label: &'static str, value: String| {
-            div()
-                .flex()
-                .items_center()
-                .justify_between()
-                .gap(px(12.))
-                .text_size(px(13.))
-                .child(div().text_color(rgb(MUTED)).child(label))
-                .child(div().min_w_0().truncate().child(value))
-        };
-        deferred(
-            anchored()
-                .anchor(Anchor::BottomLeft)
-                .snap_to_window()
-                .offset(point(px(0.), px(-52.)))
-                .child(
-                    popover()
-                        .id("settings")
-                        .occlude()
-                        .w(px(260.))
-                        .p(px(14.))
-                        .flex()
-                        .flex_col()
-                        .gap(px(10.))
-                        .on_mouse_down_out(cx.listener(|this, _: &MouseDownEvent, _, cx| {
-                            this.settings = false;
-                            cx.notify()
-                        }))
-                        .child(
-                            div()
-                                .text_size(px(12.))
-                                .font_weight(FontWeight::MEDIUM)
-                                .text_color(rgb(MUTED))
-                                .child("Settings"),
-                        )
-                        .child(row("Workspace", self.workspace.to_string()))
-                        .child(row("Server", self.version.to_string()))
-                        .child(row("AI model", ai::model()))
-                        .child(div().h(px(1.)).bg(rgb(BORDER)))
-                        .child(
-                            div()
-                                .id("sign-out")
-                                .px(px(8.))
-                                .py(px(6.))
-                                .mx(px(-8.))
-                                .rounded(px(6.))
-                                .cursor_pointer()
-                                .text_size(px(13.))
-                                .text_color(rgb(DANGER))
-                                .hover(|s| s.bg(rgb(HOVER)))
-                                .child("Sign out")
-                                .on_click(cx.listener(|this, _: &ClickEvent, window, cx| {
-                                    this.sign_out(window, cx)
-                                })),
-                        ),
-                ),
-        )
-        .with_priority(1)
+    fn open_settings(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let (workspace, version) = (self.workspace.clone(), self.version.clone());
+        let view = cx.new(|cx| SettingsView::new(workspace, version, window, cx));
+        cx.subscribe_in(&view, window, Self::on_settings).detach();
+        self.settings = Some(view);
+        window.focus(&self.focus, cx);
+        cx.notify();
+    }
+
+    fn close_settings(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.settings = None;
+        window.focus(&self.focus, cx);
+        cx.notify();
+    }
+
+    fn on_settings(
+        &mut self,
+        _: &Entity<SettingsView>,
+        ev: &SettingsEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        match ev {
+            SettingsEvent::Close => self.close_settings(window, cx),
+            SettingsEvent::SignOut => self.sign_out(window, cx),
+        }
     }
 
     fn sign_out(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -1109,7 +1082,7 @@ impl BetterOdoo {
         self.project = None;
         self.stage_filter.clear();
         self.page = false;
-        self.settings = false;
+        self.settings = None;
         self.selected = 0;
         self.reset_ai();
         self.show_connect(None, window, cx);
