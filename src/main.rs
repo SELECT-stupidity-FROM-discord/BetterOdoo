@@ -1,18 +1,20 @@
 mod ai;
 mod assets;
+mod connect;
 mod date;
 mod input;
 mod odoo;
 mod theme;
 mod ui;
 
+use connect::{ConnectView, Connected};
 use gpui::{
     App, Bounds, BoxShadow, ClickEvent, Context, Div, Entity, FocusHandle, Focusable, FontWeight,
     HighlightStyle, KeyDownEvent, SharedString, Stateful, StyledText, TitlebarOptions, Window,
     WindowBounds, WindowOptions, black, div, point, prelude::*, px, rgb, size, white,
 };
 use input::{InputEvent, TextInput};
-use odoo::{Odoo, Task};
+use odoo::{Login, Odoo, Task};
 use serde_json::json;
 use std::sync::Arc;
 use theme::*;
@@ -36,7 +38,10 @@ struct BetterOdoo {
     status: SharedString,
     proposed: Vec<Proposal>,
     today: i64,
+    connect: Option<Entity<ConnectView>>,
 }
+
+const KEYCHAIN: &str = "BetterOdoo";
 
 impl BetterOdoo {
     fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
@@ -55,36 +60,70 @@ impl BetterOdoo {
             status: "Connecting…".into(),
             proposed: vec![],
             today: date::today(),
+            connect: None,
         };
-        me.connect(cx);
+        me.restore(window, cx);
         me
     }
 
-    fn connect(&mut self, cx: &mut Context<Self>) {
-        cx.spawn(async move |this, cx| {
-            let r = cx
-                .background_executor()
-                .spawn(async {
-                    let o = Odoo::from_env()?;
-                    let version = o.version().unwrap_or_default();
-                    anyhow::Ok((Arc::new(o), version))
-                })
-                .await;
-            this.update(cx, |this, cx| match r {
-                Ok((o, version)) => {
-                    this.workspace = o.workspace().into();
-                    this.version = version.into();
-                    this.odoo = Some(o);
-                    this.reload(cx);
-                }
-                Err(e) => {
-                    this.status = e.to_string().into();
-                    cx.notify();
-                }
+    fn restore(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let read = cx.read_credentials(KEYCHAIN);
+        cx.spawn_in(window, async move |this, cx| {
+            let saved = read
+                .await
+                .ok()
+                .flatten()
+                .and_then(|(user, secret)| Login::from_credentials(&user, secret));
+            this.update_in(cx, |this, window, cx| match saved {
+                Some(login) => this.sign_in(login, window, cx),
+                None => this.show_connect(None, window, cx),
             })
             .ok();
         })
         .detach();
+    }
+
+    fn sign_in(&mut self, login: Login, window: &mut Window, cx: &mut Context<Self>) {
+        cx.spawn_in(window, async move |this, cx| {
+            let r = cx
+                .background_executor()
+                .spawn(async move { Odoo::connect(&login) })
+                .await;
+            this.update_in(cx, |this, window, cx| match r {
+                Ok(o) => this.open(Arc::new(o), window, cx),
+                Err(e) => this.show_connect(Some(e.to_string()), window, cx),
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    fn show_connect(&mut self, error: Option<String>, window: &mut Window, cx: &mut Context<Self>) {
+        let view = cx.new(|cx| ConnectView::new(error, window, cx));
+        cx.subscribe_in(&view, window, Self::on_connected).detach();
+        self.connect = Some(view);
+        cx.notify();
+    }
+
+    fn on_connected(
+        &mut self,
+        _: &Entity<ConnectView>,
+        ev: &Connected,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let (user, secret) = ev.login.to_credentials();
+        cx.write_credentials(KEYCHAIN, &user, &secret).detach();
+        self.open(ev.odoo.clone(), window, cx);
+    }
+
+    fn open(&mut self, odoo: Arc<Odoo>, window: &mut Window, cx: &mut Context<Self>) {
+        self.workspace = odoo.workspace().into();
+        self.odoo = Some(odoo);
+        self.connect = None;
+        self.status = "Syncing…".into();
+        window.focus(&self.focus, cx);
+        self.reload(cx);
     }
 
     fn reload(&mut self, cx: &mut Context<Self>) {
@@ -92,11 +131,15 @@ impl BetterOdoo {
         cx.spawn(async move |this, cx| {
             let r = cx
                 .background_executor()
-                .spawn(async move { o.tasks(json!([["stage_id.fold", "=", false]])) })
+                .spawn(async move {
+                    let version = o.version().unwrap_or_default();
+                    anyhow::Ok((version, o.tasks(json!([["stage_id.fold", "=", false]]))?))
+                })
                 .await;
             this.update(cx, |this, cx| {
                 match r {
-                    Ok(t) => {
+                    Ok((version, t)) => {
+                        this.version = version.into();
                         this.tasks = t;
                         this.today = date::today();
                         this.status = "Synced just now".into();
@@ -315,6 +358,15 @@ const COLS: [f32; 4] = [120., 92., 130., 96.];
 
 impl Render for BetterOdoo {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        if let Some(connect) = &self.connect {
+            return div()
+                .size_full()
+                .text_color(rgb(TEXT))
+                .font_family(FONT)
+                .text_size(px(14.))
+                .child(connect.clone())
+                .into_any_element();
+        }
         let visible: Vec<Task> = self.visible(cx).into_iter().cloned().collect();
         let people = self.people();
         let tone_of =
@@ -731,6 +783,7 @@ impl Render for BetterOdoo {
             .child(sidebar)
             .child(main)
             .child(detail)
+            .into_any_element()
     }
 }
 

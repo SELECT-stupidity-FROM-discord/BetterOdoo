@@ -1,6 +1,5 @@
 use anyhow::{Result, anyhow};
 use serde_json::{Value, json};
-use std::env::var;
 
 pub struct Odoo {
     url: String,
@@ -22,41 +21,149 @@ pub struct Task {
     pub logged_hours: f64,
 }
 
+#[derive(Clone)]
+pub enum Auth {
+    Password { login: String, password: String },
+    ApiKey(String),
+    Session(String),
+}
+
+#[derive(Clone)]
+pub struct Login {
+    pub url: String,
+    pub db: String,
+    pub auth: Auth,
+}
+
+impl Login {
+    pub fn to_credentials(&self) -> (String, Vec<u8>) {
+        let (kind, user, secret) = match &self.auth {
+            Auth::Password { login, password } => ("password", login.as_str(), password),
+            Auth::ApiKey(k) => ("api_key", "", k),
+            Auth::Session(c) => ("session", "", c),
+        };
+        let user = [kind, &self.url, &self.db, user].join("\n");
+        (user, secret.as_bytes().to_vec())
+    }
+
+    pub fn from_credentials(user: &str, secret: Vec<u8>) -> Option<Self> {
+        let mut parts = user.splitn(4, '\n');
+        let (kind, url, db, login) = (parts.next()?, parts.next()?, parts.next()?, parts.next()?);
+        let secret = String::from_utf8(secret).ok()?;
+        let auth = match kind {
+            "password" => Auth::Password {
+                login: login.into(),
+                password: secret,
+            },
+            "api_key" => Auth::ApiKey(secret),
+            "session" => Auth::Session(secret),
+            _ => return None,
+        };
+        Some(Self {
+            url: url.into(),
+            db: db.into(),
+            auth,
+        })
+    }
+}
+
+pub struct Probe {
+    pub url: String,
+    pub version: String,
+    pub db: String,
+    pub sso: Option<&'static str>,
+}
+
+pub fn normalize_url(input: &str) -> String {
+    let s = input.trim().trim_end_matches('/');
+    if s.contains("://") {
+        return s.into();
+    }
+    let local = s.starts_with("localhost") || s.starts_with("127.") || s.contains(".localhost");
+    format!("{}://{s}", if local { "http" } else { "https" })
+}
+
+fn subdomain(url: &str) -> String {
+    let host = url.split("://").last().unwrap_or(url);
+    host.split(['.', ':', '/']).next().unwrap_or(host).into()
+}
+
 impl Odoo {
-    pub fn from_env() -> Result<Self> {
-        let env = |k: &str| var(k).map_err(|_| anyhow!("set {k} (see PLAN.md, Sign-in)"));
-        let db = var("ODOO_DB").unwrap_or_default();
-        let mut me = Self {
-            url: env("ODOO_URL")?.trim_end_matches('/').into(),
+    fn bare(url: &str) -> Self {
+        Self {
+            url: normalize_url(url),
             agent: ureq::Agent::new_with_defaults(),
             cookie: None,
             bearer: None,
             uid: 0,
-        };
-        if let Ok(key) = var("ODOO_API_KEY") {
-            me.bearer = Some((key, db));
-        } else if let Ok(s) = var("ODOO_SESSION") {
-            me.cookie = Some(s);
-        } else {
-            let res = me.rpc(
-                "/web/session/authenticate",
-                json!({"db": db, "login": env("ODOO_LOGIN")?, "password": env("ODOO_PASSWORD")?}),
-            )?;
-            me.uid = res["uid"].as_i64().ok_or_else(|| {
-                anyhow!("password login failed. SSO or 2FA account? Use ODOO_SESSION instead")
-            })?;
-            return Ok(me);
+        }
+    }
+
+    pub fn probe(input: &str) -> Result<Probe> {
+        let me = Self::bare(input);
+        let version = me
+            .version()
+            .map_err(|_| anyhow!("No Odoo server answered at this address"))?;
+        let db = me
+            .rpc("/web/database/list", json!({}))
+            .ok()
+            .and_then(|v| v.as_array()?.first()?.as_str().map(String::from))
+            .unwrap_or_else(|| subdomain(&me.url));
+        let page = me
+            .agent
+            .get(format!("{}/web/login", me.url))
+            .call()
+            .ok()
+            .and_then(|mut r| r.body_mut().read_to_string().ok())
+            .unwrap_or_default()
+            .to_lowercase();
+        let sso = page.contains("auth_oauth").then(|| {
+            if page.contains("google") {
+                "Google"
+            } else if page.contains("microsoft") {
+                "Microsoft"
+            } else {
+                "SSO"
+            }
+        });
+        Ok(Probe {
+            url: me.url,
+            version,
+            db,
+            sso,
+        })
+    }
+
+    pub fn connect(login: &Login) -> Result<Self> {
+        let mut me = Self::bare(&login.url);
+        match &login.auth {
+            Auth::Password {
+                login: user,
+                password,
+            } => {
+                let res = me.rpc(
+                    "/web/session/authenticate",
+                    json!({"db": login.db, "login": user, "password": password}),
+                )?;
+                me.uid = res["uid"].as_i64().ok_or_else(|| {
+                    anyhow!("Wrong email or password. If you sign in with Google, Microsoft or 2FA, use a session cookie instead.")
+                })?;
+                return Ok(me);
+            }
+            Auth::ApiKey(key) => me.bearer = Some((key.clone(), login.db.clone())),
+            Auth::Session(cookie) => me.cookie = Some(cookie.trim().into()),
         }
         let ctx = me
             .call("res.users", "context_get", json!({}))
-            .map_err(|e| anyhow!("sign-in rejected (expired cookie or bad key?): {e}"))?;
+            .map_err(|_| {
+                anyhow!("Odoo rejected this sign-in. The key or cookie may be wrong or expired.")
+            })?;
         me.uid = ctx["uid"].as_i64().unwrap_or(0);
         Ok(me)
     }
 
     pub fn workspace(&self) -> String {
-        let host = self.url.split("://").last().unwrap_or(&self.url);
-        host.split(['.', ':', '/']).next().unwrap_or(host).into()
+        subdomain(&self.url)
     }
 
     pub fn version(&self) -> Result<String> {
@@ -166,4 +273,38 @@ impl Odoo {
 
 fn m2o(v: &Value) -> String {
     v.get(1).and_then(|s| s.as_str()).unwrap_or("—").into()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn urls_and_credentials() {
+        assert_eq!(
+            normalize_url(" yourco.odoo.com/ "),
+            "https://yourco.odoo.com"
+        );
+        assert_eq!(normalize_url("localhost:8069"), "http://localhost:8069");
+        assert_eq!(normalize_url("http://x.io"), "http://x.io");
+        assert_eq!(subdomain("https://yourco.odoo.com"), "yourco");
+        let login = Login {
+            url: "https://yourco.odoo.com".into(),
+            db: "yourco".into(),
+            auth: Auth::Password {
+                login: "me@yourco.com".into(),
+                password: "p\nw".into(),
+            },
+        };
+        let (user, secret) = login.to_credentials();
+        let back = Login::from_credentials(&user, secret).unwrap();
+        assert_eq!(
+            (back.url.as_str(), back.db.as_str()),
+            ("https://yourco.odoo.com", "yourco")
+        );
+        assert!(
+            matches!(back.auth, Auth::Password { login, password } if login == "me@yourco.com" && password == "p\nw")
+        );
+        assert!(Login::from_credentials("bogus", vec![]).is_none());
+    }
 }
