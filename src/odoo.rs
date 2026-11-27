@@ -225,7 +225,6 @@ impl Odoo {
             self.call("project.task", "search_read", json!({
                 "domain": domain,
                 "fields": ["name", "project_id", "stage_id", "user_ids", "date_deadline", "priority", "effective_hours"],
-                "limit": 200,
                 "order": "priority desc, date_deadline asc",
             }))
         };
@@ -240,6 +239,8 @@ impl Odoo {
             .flatten()
             .flat_map(|r| r["user_ids"].as_array().cloned().unwrap_or_default())
             .filter_map(|v| v.as_i64())
+            .collect::<std::collections::BTreeSet<_>>()
+            .into_iter()
             .collect();
         let users = self.call("res.users", "read", json!({"ids": ids, "fields": ["name"]}))?;
         let name_of = |id: i64| {
