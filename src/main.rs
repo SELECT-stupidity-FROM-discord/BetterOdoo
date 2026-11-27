@@ -17,7 +17,11 @@ use gpui::{
 use input::{InputEvent, TextInput};
 use odoo::{Login, Odoo, SubTask, Task};
 use serde_json::json;
-use std::{collections::HashMap, ops::Range, sync::Arc};
+use std::{
+    collections::{HashMap, HashSet},
+    ops::Range,
+    sync::Arc,
+};
 use theme::*;
 use ui::{icon, kbd, popover, tag};
 
@@ -41,6 +45,9 @@ struct BetterOdoo {
     page: bool,
     people_menu: bool,
     shortcuts: bool,
+    hide_done: bool,
+    hidden_stages: HashSet<String>,
+    stage_menu: bool,
     today: i64,
     connect: Option<Entity<ConnectView>>,
     rows_scroll: UniformListScrollHandle,
@@ -68,6 +75,9 @@ impl BetterOdoo {
             page: false,
             people_menu: false,
             shortcuts: false,
+            hide_done: false,
+            hidden_stages: HashSet::new(),
+            stage_menu: false,
             today: date::today(),
             connect: None,
             rows_scroll: UniformListScrollHandle::new(),
@@ -144,7 +154,7 @@ impl BetterOdoo {
                 .background_executor()
                 .spawn(async move {
                     let version = o.version().unwrap_or_default();
-                    anyhow::Ok((version, o.tasks(json!([["stage_id.fold", "=", false]]))?))
+                    anyhow::Ok((version, o.tasks(json!([]))?))
                 })
                 .await;
             this.update(cx, |this, cx| {
@@ -197,6 +207,8 @@ impl BetterOdoo {
                     .is_none_or(|a| t.assignees.contains(a))
             })
             .filter(|t| self.project.as_ref().is_none_or(|p| &t.project == p))
+            .filter(|t| !(self.hide_done && t.done))
+            .filter(|t| !self.hidden_stages.contains(&t.stage))
             .filter(|t| {
                 q.is_empty()
                     || t.name.to_lowercase().contains(&q)
@@ -301,6 +313,12 @@ impl BetterOdoo {
         .detach();
     }
 
+    fn toggle_done(&mut self) {
+        self.hide_done = !self.hide_done;
+        self.selected = 0;
+        self.rows_scroll.scroll_to_item(0, ScrollStrategy::Top);
+    }
+
     fn set_assignee(&mut self, who: Option<String>) {
         self.assignee = who;
         self.selected = 0;
@@ -335,6 +353,8 @@ impl BetterOdoo {
             "enter" if n > 0 => self.page = true,
             "escape" if self.people_menu => self.people_menu = false,
             "escape" if self.shortcuts => self.shortcuts = false,
+            "escape" if self.stage_menu => self.stage_menu = false,
+            "h" => self.toggle_done(),
             "escape" if !self.proposed.is_empty() => self.proposed.clear(),
             "escape" => self.page = false,
             "0" => self.set_assignee(None),
@@ -428,7 +448,7 @@ impl Render for BetterOdoo {
         let overdue = self
             .tasks
             .iter()
-            .filter(|t| date::due(t.deadline.as_deref(), self.today).overdue)
+            .filter(|t| !t.done && date::due(t.deadline.as_deref(), self.today).overdue)
             .count();
         let filter_focused = self.filter.focus_handle(cx).is_focused(window);
 
@@ -688,6 +708,37 @@ impl Render for BetterOdoo {
             .border_color(rgb(BORDER))
             .child(chips)
             .child(div().flex_1())
+            .child({
+                let was_open = self.stage_menu;
+                let label = match self.hidden_stages.len() {
+                    0 => "All stages".to_string(),
+                    n => format!("{n} stage{} hidden", if n == 1 { "" } else { "s" }),
+                };
+                div()
+                    .child(
+                        chip("chip-stages".into(), label, !self.hidden_stages.is_empty())
+                            .when(was_open, |d| d.bg(rgb(HOVER)))
+                            .on_mouse_down(
+                                MouseButton::Left,
+                                cx.listener(move |this, _: &MouseDownEvent, _, cx| {
+                                    this.stage_menu = !was_open;
+                                    cx.notify()
+                                }),
+                            ),
+                    )
+                    .when(was_open, |d| d.child(self.stage_menu(cx)))
+            })
+            .child(
+                chip(
+                    "chip-hide-done".into(),
+                    "Hide completed".into(),
+                    self.hide_done,
+                )
+                .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                    this.toggle_done();
+                    cx.notify()
+                })),
+            )
             .child(
                 div()
                     .flex()
@@ -740,7 +791,8 @@ impl Render for BetterOdoo {
                             .child(self.project.clone().unwrap_or("My Tasks".into())),
                     )
                     .child(div().text_color(rgb(MUTED)).child(format!(
-                        "Open tasks across {} projects · {} overdue",
+                        "{} tasks across {} projects · {} overdue",
+                        self.tasks.len(),
                         projects.len(),
                         overdue
                     ))),
@@ -805,6 +857,7 @@ impl BetterOdoo {
             (people.as_str(), "Filter by person"),
             ("0", "Everyone"),
             (filter, "Filter tasks"),
+            ("h", "Hide completed"),
             ("s", "Suggest sub-tasks with AI"),
             ("?", "Show shortcuts"),
         ];
@@ -842,6 +895,98 @@ impl BetterOdoo {
                                 .child(label)
                                 .child(div().flex().gap(px(4.)).children(k.split("  ").map(kbd)))
                         })),
+                ),
+        )
+        .with_priority(1)
+    }
+
+    fn stage_menu(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let mut stages: Vec<(String, usize)> = Vec::new();
+        for t in &self.tasks {
+            match stages.iter_mut().find(|(s, _)| s == &t.stage) {
+                Some((_, n)) => *n += 1,
+                None => stages.push((t.stage.clone(), 1)),
+            }
+        }
+        stages.sort_by_key(|(s, n)| (std::cmp::Reverse(*n), s.to_lowercase()));
+        let items = stages.into_iter().enumerate().map(|(i, (stage, n))| {
+            let shown = !self.hidden_stages.contains(&stage);
+            let check = div()
+                .flex_none()
+                .size(px(15.))
+                .rounded(px(3.))
+                .flex()
+                .items_center()
+                .justify_center();
+            let check = if shown {
+                check.bg(rgb(TEXT)).child(icon("check", 11., PAGE))
+            } else {
+                check.border_1().border_color(rgb(MUTED))
+            };
+            div()
+                .id(("stage", i))
+                .flex()
+                .items_center()
+                .gap(px(10.))
+                .px(px(8.))
+                .py(px(6.))
+                .rounded(px(6.))
+                .cursor_pointer()
+                .hover(|s| s.bg(rgb(HOVER)))
+                .child(check)
+                .child(div().flex_1().min_w_0().truncate().child(tag(
+                    stage.clone(),
+                    stage_tone(&stage),
+                    12.,
+                )))
+                .child(
+                    div()
+                        .text_size(px(12.))
+                        .text_color(rgb(MUTED))
+                        .child(n.to_string()),
+                )
+                .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                    if !this.hidden_stages.remove(&stage) {
+                        this.hidden_stages.insert(stage.clone());
+                    }
+                    this.selected = 0;
+                    this.rows_scroll.scroll_to_item(0, ScrollStrategy::Top);
+                    cx.notify()
+                }))
+        });
+        deferred(
+            anchored()
+                .snap_to_window()
+                .offset(point(px(0.), px(6.)))
+                .child(
+                    popover()
+                        .id("stage-menu")
+                        .occlude()
+                        .w(px(300.))
+                        .max_h(px(380.))
+                        .overflow_y_scroll()
+                        .p(px(6.))
+                        .on_mouse_down_out(cx.listener(|this, _: &MouseDownEvent, _, cx| {
+                            this.stage_menu = false;
+                            cx.notify()
+                        }))
+                        .child(
+                            div()
+                                .id("stages-all")
+                                .px(px(8.))
+                                .py(px(6.))
+                                .rounded(px(6.))
+                                .cursor_pointer()
+                                .text_size(px(13.))
+                                .text_color(rgb(TEXT_SOFT))
+                                .hover(|s| s.bg(rgb(HOVER)))
+                                .child("Show all stages")
+                                .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                                    this.hidden_stages.clear();
+                                    cx.notify()
+                                })),
+                        )
+                        .children(items),
                 ),
         )
         .with_priority(1)
@@ -941,7 +1086,8 @@ impl BetterOdoo {
             .zip(range)
             .map(|(t, i)| {
                 let on = i == self.selected;
-                let due = date::due(t.deadline.as_deref(), self.today);
+                let mut due = date::due(t.deadline.as_deref(), self.today);
+                due.overdue &= !t.done;
                 div()
                     .id(("row", i))
                     .w_full()
@@ -976,6 +1122,7 @@ impl BetterOdoo {
                                     .min_w_0()
                                     .truncate()
                                     .font_weight(FontWeight::MEDIUM)
+                                    .when(t.done, |d| d.text_color(rgb(MUTED)))
                                     .child(t.name.clone()),
                             )
                             .when(t.priority_high, |d| {
@@ -1047,7 +1194,8 @@ impl BetterOdoo {
             .pt(px(40.))
             .pb(px(64.))
             .gap(px(18.));
-        let due = date::due(t.deadline.as_deref(), self.today);
+        let mut due = date::due(t.deadline.as_deref(), self.today);
+        due.overdue &= !t.done;
         let prop = |icon_name: &str, label: &str| {
             div()
                 .flex_none()
