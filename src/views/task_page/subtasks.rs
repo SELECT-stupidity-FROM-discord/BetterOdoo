@@ -192,6 +192,7 @@ impl Render for SubtaskList {
             .flex()
             .flex_col()
             .gap(px(12.))
+            .child(GhostInput::new(&self.quick, "plus"))
             .when(self.entries.read(cx).is_open(), |d| {
                 d.child(self.entries.clone())
             })
@@ -206,6 +207,5 @@ impl Render for SubtaskList {
             .when(subs.is_empty(), |d| {
                 d.child(div().text_color(rgb(MUTED)).child("No sub-tasks yet."))
             })
-            .child(GhostInput::new(&self.quick, "plus"))
     }
 }
