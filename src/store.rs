@@ -1,12 +1,14 @@
 use crate::date;
-use crate::odoo::{Odoo, Stage, Task, Timesheet, WorkItem};
+use crate::html::{self, Block};
+use crate::odoo::{Message, Odoo, Stage, Task, Timesheet, WorkItem};
 use gpui::{Context, EventEmitter, SharedString};
 use std::{collections::HashMap, sync::Arc};
 
 #[derive(Clone)]
 pub struct Detail {
-    pub description: String,
+    pub description: Vec<Block>,
     pub timesheets: Vec<Timesheet>,
+    pub messages: Vec<Message>,
 }
 
 pub enum Load<T> {
@@ -149,8 +151,9 @@ impl Store {
                 .background_executor()
                 .spawn(async move {
                     anyhow::Ok(Detail {
-                        description: o.description(id)?,
+                        description: html::parse(&o.description(id)?, o.base_url()),
                         timesheets: o.timesheets(id).unwrap_or_default(),
+                        messages: o.messages(id).unwrap_or_default(),
                     })
                 })
                 .await;
@@ -274,14 +277,28 @@ impl Store {
         item: WorkItem,
         cx: &mut Context<Self>,
     ) -> gpui::Task<Result<(), SharedString>> {
-        self.record(task, cx, move |o, task| o.add_timesheet(task, &item))
+        self.record(task, cx, move |o, task| {
+            o.add_timesheet(task, &item).map(|_| None)
+        })
+    }
+
+    pub fn post_message(
+        &mut self,
+        task: Task,
+        text: String,
+        as_note: bool,
+        cx: &mut Context<Self>,
+    ) -> gpui::Task<Result<(), SharedString>> {
+        self.record(task, cx, move |o, task| {
+            o.post_message(task.id, &text, as_note).map(|_| None)
+        })
     }
 
     fn record(
         &mut self,
         task: Task,
         cx: &mut Context<Self>,
-        job: impl FnOnce(&Odoo, &Task) -> anyhow::Result<()> + Send + 'static,
+        job: impl FnOnce(&Odoo, &Task) -> anyhow::Result<Option<String>> + Send + 'static,
     ) -> gpui::Task<Result<(), SharedString>> {
         let Some(o) = self.odoo.clone() else {
             return gpui::Task::ready(Err("Not connected".into()));
@@ -292,16 +309,20 @@ impl Store {
                 .background_executor()
                 .spawn(async move { job(&o, &task) })
                 .await
-                .map_err(|e| SharedString::from(e.to_string()));
+                .map_err(|e| SharedString::from(e.to_string()))
+                .map(|w| w.map(SharedString::from));
             this.update(cx, |this, cx| {
-                if r.is_ok() {
+                if let Ok(warning) = &r {
                     this.details.remove(&id);
                     this.ensure_detail(id, cx);
                     this.reload(cx);
+                    if let Some(w) = warning {
+                        cx.emit(StoreEvent::Failed(w.clone()));
+                    }
                 }
             })
             .ok();
-            r
+            r.map(|_| ())
         })
     }
 }

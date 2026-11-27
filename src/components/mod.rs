@@ -8,6 +8,7 @@ mod ghost;
 mod misc;
 mod nav;
 mod panel;
+mod rich_text;
 mod tabs;
 
 pub use basics::{OnClick, OnPress, icon, kbd, popover, tag};
@@ -20,4 +21,5 @@ pub use ghost::GhostInput;
 pub use misc::{Avatar, Property};
 pub use nav::{ColumnHeader, IconButton, NavItem};
 pub use panel::{Card, Panel, Section, Tint};
+pub use rich_text::RichText;
 pub use tabs::{Segmented, TabBar};

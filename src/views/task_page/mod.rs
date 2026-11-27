@@ -1,13 +1,15 @@
+mod activity;
 mod entries;
 mod subtasks;
 mod timesheets;
 
-use crate::components::{Button, Property, Segmented, TabBar, Variant, tag};
+use crate::components::{Button, Property, RichText, Segmented, TabBar, Variant, tag};
 use crate::date;
 use crate::format::{hours, stage_tone};
 use crate::odoo::Task;
 use crate::store::{Load, Store, StoreEvent};
 use crate::theme::*;
+use activity::ActivityTab;
 use entries::EntryEditor;
 use gpui::{
     ClickEvent, Context, Entity, EventEmitter, FocusHandle, FontWeight, KeyDownEvent, SharedString,
@@ -21,6 +23,7 @@ enum Tab {
     Description,
     Timesheets,
     SubTasks,
+    Activity,
 }
 
 pub enum ChildEvent {
@@ -41,6 +44,7 @@ pub struct TaskPage {
     entries: Entity<EntryEditor>,
     subtasks: Entity<SubtaskList>,
     timesheets: Entity<TimesheetTab>,
+    activity: Entity<ActivityTab>,
     project_label: SharedString,
 }
 
@@ -64,6 +68,8 @@ impl TaskPage {
         let subtasks =
             cx.new(|cx| SubtaskList::new(store.clone(), root.clone(), entries.clone(), window, cx));
         let timesheets = cx.new(|cx| TimesheetTab::new(store.clone(), root.clone(), window, cx));
+        let activity = cx.new(|cx| ActivityTab::new(store.clone(), root.clone(), window, cx));
+        cx.subscribe_in(&activity, window, Self::on_child).detach();
         cx.subscribe_in(&subtasks, window, Self::on_child).detach();
         cx.subscribe_in(&timesheets, window, Self::on_child)
             .detach();
@@ -76,6 +82,7 @@ impl TaskPage {
             entries,
             subtasks,
             timesheets,
+            activity,
             project_label: "My Tasks".into(),
         }
     }
@@ -100,6 +107,7 @@ impl TaskPage {
         self.entries.update(cx, |e, cx| e.set_task(id, cx));
         self.subtasks.update(cx, |s, cx| s.set_task(id, cx));
         self.timesheets.update(cx, |t, cx| t.set_task(id, cx));
+        self.activity.update(cx, |a, cx| a.set_task(id, cx));
         self.store.update(cx, |s, cx| {
             s.ensure_detail(id, cx);
             s.ensure_stages(project.flatten(), cx);
@@ -278,19 +286,17 @@ impl TaskPage {
                 tab(Tab::Timesheets),
             )
             .tab(sub_label, self.tab == Tab::SubTasks, tab(Tab::SubTasks))
+            .tab("Activity", self.tab == Tab::Activity, tab(Tab::Activity))
     }
 
-    fn description(&self, cx: &Context<Self>) -> impl IntoElement {
-        let text = match self.store.read(cx).detail(self.id) {
-            Load::Loading => "Loading…".to_string(),
-            Load::Failed(e) => format!("Couldn’t load: {e}"),
-            Load::Ready(d) if d.description.is_empty() => "No description.".to_string(),
-            Load::Ready(d) => d.description.clone(),
-        };
-        div()
-            .line_height(px(22.))
-            .text_color(rgb(TEXT_SOFT))
-            .child(text)
+    fn description(&self, cx: &Context<Self>) -> gpui::AnyElement {
+        let note = |text: String| div().text_color(rgb(MUTED)).child(text).into_any_element();
+        match self.store.read(cx).detail(self.id) {
+            Load::Loading => note("Loading…".into()),
+            Load::Failed(e) => note(format!("Couldn’t load: {e}")),
+            Load::Ready(d) if d.description.is_empty() => note("No description.".into()),
+            Load::Ready(d) => RichText::new(d.description.clone()).into_any_element(),
+        }
     }
 }
 
@@ -311,9 +317,10 @@ impl Render for TaskPage {
         };
 
         let body = match self.tab {
-            Tab::Description => self.description(cx).into_any_element(),
+            Tab::Description => self.description(cx),
             Tab::Timesheets => self.timesheets.clone().into_any_element(),
             Tab::SubTasks => self.subtasks.clone().into_any_element(),
+            Tab::Activity => self.activity.clone().into_any_element(),
         };
 
         div()

@@ -3,6 +3,7 @@ mod assets;
 mod components;
 mod date;
 mod format;
+mod html;
 mod input;
 mod odoo;
 mod ollama;

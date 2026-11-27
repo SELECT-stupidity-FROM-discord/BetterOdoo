@@ -43,6 +43,21 @@ pub struct Stage {
 }
 
 #[derive(Clone, Debug)]
+pub struct Change {
+    pub field: String,
+    pub old: String,
+    pub new: String,
+}
+
+#[derive(Clone, Debug)]
+pub struct Message {
+    pub author: String,
+    pub date: String,
+    pub body: String,
+    pub changes: Vec<Change>,
+}
+
+#[derive(Clone, Debug)]
 pub struct Timesheet {
     pub name: String,
     pub hours: f64,
@@ -346,7 +361,7 @@ impl Odoo {
             .collect())
     }
 
-    pub fn add_work(&self, parent: &Task, items: &[WorkItem]) -> Result<()> {
+    pub fn add_work(&self, parent: &Task, items: &[WorkItem]) -> Result<Option<String>> {
         let vals: Vec<Value> = items
             .iter()
             .map(|i| {
@@ -359,6 +374,7 @@ impl Odoo {
             })
             .collect();
         let made = self.call("project.task", "create", json!({"vals_list": vals}))?;
+        let mut problems = Vec::new();
         let done: Vec<i64> = made
             .as_array()
             .into_iter()
@@ -367,28 +383,35 @@ impl Odoo {
             .filter(|(_, i)| i.done)
             .filter_map(|(id, _)| id.as_i64())
             .collect();
-        if !done.is_empty() {
-            self.call(
+        if !done.is_empty()
+            && let Err(e) = self.call(
                 "project.task",
                 "write",
                 json!({"ids": done, "vals": {"state": "1_done"}}),
             )
-            .map_err(|e| anyhow!("Sub-tasks added, but couldn’t mark them done: {e}"))?;
+        {
+            problems.push(format!("couldn’t mark them done ({e})"));
         }
         let lines: Vec<Value> = items
             .iter()
             .filter(|i| i.hours > 0.)
             .map(|i| timesheet_vals(parent, i))
             .collect();
-        if !lines.is_empty() {
-            self.call(
+        if !lines.is_empty()
+            && let Err(e) = self.call(
                 "account.analytic.line",
                 "create",
                 json!({"vals_list": lines}),
             )
-            .map_err(|e| anyhow!("Sub-tasks added, but timesheets failed: {e}"))?;
+        {
+            problems.push(format!("couldn’t log the time ({e})"));
         }
-        Ok(())
+        Ok((!problems.is_empty()).then(|| {
+            format!(
+                "Sub-tasks were saved, but {}. Fix that in Odoo or the Timesheets tab; don’t add them again.",
+                problems.join(" and ")
+            )
+        }))
     }
 
     pub fn add_timesheet(&self, task: &Task, item: &WorkItem) -> Result<()> {
@@ -427,13 +450,113 @@ impl Odoo {
             .collect())
     }
 
+    pub fn base_url(&self) -> &str {
+        &self.url
+    }
+
     pub fn description(&self, task: i64) -> Result<String> {
         let rows = self.call(
             "project.task",
             "read",
             json!({"ids": [task], "fields": ["description"]}),
         )?;
-        Ok(html_text(rows[0]["description"].as_str().unwrap_or("")))
+        Ok(rows[0]["description"].as_str().unwrap_or("").to_string())
+    }
+
+    pub fn messages(&self, task: i64) -> Result<Vec<Message>> {
+        let rows = self.call(
+            "mail.message",
+            "search_read",
+            json!({
+                "domain": [["model", "=", "project.task"], ["res_id", "=", task]],
+                "fields": ["author_id", "date", "body", "tracking_value_ids"],
+                "order": "id desc",
+            }),
+        )?;
+        let ids: Vec<i64> = rows
+            .as_array()
+            .into_iter()
+            .flatten()
+            .flat_map(|r| {
+                r["tracking_value_ids"]
+                    .as_array()
+                    .cloned()
+                    .unwrap_or_default()
+            })
+            .filter_map(|v| v.as_i64())
+            .collect();
+        let tracking = if ids.is_empty() {
+            json!([])
+        } else {
+            self.call(
+                "mail.tracking.value",
+                "read",
+                json!({"ids": ids, "fields": [
+                    "field_id", "old_value_char", "new_value_char", "old_value_datetime",
+                    "new_value_datetime", "old_value_integer", "new_value_integer",
+                    "old_value_float", "new_value_float",
+                ]}),
+            )
+            .unwrap_or(json!([]))
+        };
+        let change = |t: &Value| {
+            let pick = |side: &str| {
+                ["char", "datetime", "integer", "float"]
+                    .iter()
+                    .map(|k| &t[format!("{side}_value_{k}")])
+                    .find(|v| !v.is_null() && **v != json!(false) && **v != json!(""))
+                    .map(|v| v.as_str().map_or(v.to_string(), str::to_string))
+                    .unwrap_or("None".into())
+            };
+            Change {
+                field: m2o(&t["field_id"]),
+                old: pick("old"),
+                new: pick("new"),
+            }
+        };
+        Ok(rows
+            .as_array()
+            .into_iter()
+            .flatten()
+            .map(|r| Message {
+                author: m2o(&r["author_id"]),
+                date: r["date"].as_str().unwrap_or("").into(),
+                body: r["body"].as_str().unwrap_or("").into(),
+                changes: r["tracking_value_ids"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|id| tracking.as_array()?.iter().find(|t| t["id"] == *id))
+                    .map(change)
+                    .collect(),
+            })
+            .collect())
+    }
+
+    pub fn post_message(&self, task: i64, text: &str, as_note: bool) -> Result<()> {
+        let body = format!(
+            "<p>{}</p>",
+            text.replace('&', "&amp;")
+                .replace('<', "&lt;")
+                .replace('>', "&gt;")
+                .replace('\n', "<br>")
+        );
+        let subtype = if as_note {
+            "mail.mt_note"
+        } else {
+            "mail.mt_comment"
+        };
+        self.call(
+            "project.task",
+            "message_post",
+            json!({
+                "ids": [task],
+                "body": body,
+                "message_type": "comment",
+                "subtype_xmlid": subtype,
+            }),
+        )?;
+        Ok(())
     }
 
     pub fn stages(&self, project: i64) -> Result<Vec<Stage>> {
@@ -492,55 +615,6 @@ fn timesheet_vals(task: &Task, item: &WorkItem) -> Value {
     })
 }
 
-pub fn html_text(html: &str) -> String {
-    let mut out = String::new();
-    let mut chars = html.chars();
-    while let Some(c) = chars.next() {
-        if c != '<' {
-            out.push(c);
-            continue;
-        }
-        let tag: String = chars.by_ref().take_while(|&c| c != '>').collect();
-        let tag = tag.trim().to_lowercase();
-        let name = tag
-            .split(|c: char| c.is_whitespace() || c == '/')
-            .find(|s| !s.is_empty());
-        if tag.starts_with("br")
-            || (tag.starts_with('/')
-                && matches!(
-                    name,
-                    Some("p" | "div" | "li" | "tr" | "h1" | "h2" | "h3" | "h4")
-                ))
-        {
-            out.push('\n');
-        } else if name == Some("li") && !tag.starts_with('/') {
-            out.push_str("• ");
-        }
-    }
-    let text = out
-        .replace("&nbsp;", " ")
-        .replace("&lt;", "<")
-        .replace("&gt;", ">")
-        .replace("&quot;", "\"")
-        .replace("&#39;", "'")
-        .replace("&amp;", "&");
-    let mut collapsed = String::new();
-    let mut blank = 0;
-    for line in text.lines() {
-        if line.trim().is_empty() {
-            blank += 1;
-            if blank > 1 {
-                continue;
-            }
-        } else {
-            blank = 0;
-        }
-        collapsed.push_str(line.trim_end());
-        collapsed.push('\n');
-    }
-    collapsed.trim().to_string()
-}
-
 fn m2o(v: &Value) -> String {
     v.get(1).and_then(|s| s.as_str()).unwrap_or("—").into()
 }
@@ -548,15 +622,6 @@ fn m2o(v: &Value) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn html_reads_as_plain_text() {
-        let html = "<p>Fix the <b>ETA</b> card &amp; push</p><ul><li>one</li><li>two</li></ul><p><br></p><p>end</p>";
-        assert_eq!(
-            html_text(html),
-            "Fix the ETA card & push\n• one\n• two\n\nend"
-        );
-    }
 
     #[test]
     fn urls_and_credentials() {

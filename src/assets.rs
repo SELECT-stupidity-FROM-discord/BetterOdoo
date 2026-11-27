@@ -26,7 +26,8 @@ const ICONS: &[(&str, &[u8])] = icons!(
     "chevron-right",
     "chevron-down",
     "plus",
-    "grip"
+    "grip",
+    "attach"
 );
 
 pub struct Assets;
