@@ -790,47 +790,50 @@ impl Render for BetterOdoo {
             )
             .child(
                 div()
-                    .flex()
-                    .items_center()
-                    .gap(px(8.))
-                    .p(px(10.))
-                    .text_size(px(12.))
-                    .text_color(rgb(MUTED))
                     .child(
                         div()
-                            .flex_none()
-                            .size(px(6.))
-                            .rounded_full()
-                            .bg(rgb(if synced { SUCCESS } else { MUTED })),
-                    )
-                    .child(
-                        div()
-                            .flex_1()
-                            .min_w_0()
-                            .truncate()
-                            .child(self.status.clone()),
-                    )
-                    .child(
-                        div()
-                            .id("cog")
-                            .flex_none()
-                            .p(px(5.))
-                            .rounded(px(6.))
-                            .cursor_pointer()
-                            .when(settings_open, |d| d.bg(rgb(HOVER)))
-                            .hover(|s| s.bg(rgb(HOVER)))
-                            .child(icon("cog", 16., MUTED))
-                            .on_mouse_down(
-                                MouseButton::Left,
-                                cx.listener(move |this, _: &MouseDownEvent, _, cx| {
-                                    this.settings = !settings_open;
-                                    this.shortcuts = false;
-                                    cx.notify()
-                                }),
+                            .flex()
+                            .items_center()
+                            .gap(px(8.))
+                            .p(px(10.))
+                            .text_size(px(12.))
+                            .text_color(rgb(MUTED))
+                            .child(
+                                div()
+                                    .flex_none()
+                                    .size(px(6.))
+                                    .rounded_full()
+                                    .bg(rgb(if synced { SUCCESS } else { MUTED })),
+                            )
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .min_w_0()
+                                    .truncate()
+                                    .child(self.status.clone()),
+                            )
+                            .child(
+                                div()
+                                    .id("cog")
+                                    .flex_none()
+                                    .p(px(5.))
+                                    .rounded(px(6.))
+                                    .cursor_pointer()
+                                    .when(settings_open, |d| d.bg(rgb(HOVER)))
+                                    .hover(|s| s.bg(rgb(HOVER)))
+                                    .child(icon("cog", 16., MUTED))
+                                    .on_mouse_down(
+                                        MouseButton::Left,
+                                        cx.listener(move |this, _: &MouseDownEvent, _, cx| {
+                                            this.settings = !settings_open;
+                                            this.shortcuts = false;
+                                            cx.notify()
+                                        }),
+                                    ),
                             ),
-                    ),
-            )
-            .when(settings_open, |d| d.child(self.settings_popover(cx)));
+                    )
+                    .when(settings_open, |d| d.child(self.settings_popover(cx))),
+            );
 
         let chip = |id: SharedString, label: String, on: bool| {
             div()
@@ -1049,7 +1052,7 @@ impl BetterOdoo {
             anchored()
                 .anchor(Anchor::BottomLeft)
                 .snap_to_window()
-                .offset(point(px(0.), px(-44.)))
+                .offset(point(px(0.), px(-52.)))
                 .child(
                     popover()
                         .id("settings")
