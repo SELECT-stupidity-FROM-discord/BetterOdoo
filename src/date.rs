@@ -27,6 +27,27 @@ fn days_from_civil(y: i64, m: i64, d: i64) -> i64 {
     era * 146_097 + doe - 719_468
 }
 
+pub fn iso(days: i64) -> String {
+    let z = days + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z - era * 146_097;
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    let y = yoe + era * 400 + i64::from(m <= 2);
+    format!("{y:04}-{m:02}-{d:02}")
+}
+
+pub fn weekday(days: i64) -> &'static str {
+    WEEKDAYS[(days + 4).rem_euclid(7) as usize]
+}
+
+pub fn is_valid(s: &str) -> bool {
+    parse(s).is_some_and(|(y, m, d)| iso(days_from_civil(y, m, d)) == s)
+}
+
 fn parse(s: &str) -> Option<(i64, i64, i64)> {
     let mut it = s.get(..10)?.split('-').map(|p| p.parse::<i64>().ok());
     Some((it.next()??, it.next()??, it.next()??))
@@ -71,5 +92,9 @@ mod tests {
         assert!(late.overdue && late.label == "Yesterday");
         assert_eq!(due(None, today).label, "—");
         assert_eq!(due(Some("garbage"), today).label, "—");
+        assert_eq!(iso(today), "2026-11-28");
+        assert_eq!(iso(days_from_civil(2024, 2, 29)), "2024-02-29");
+        assert_eq!(weekday(today), "Sat");
+        assert!(is_valid("2026-11-28") && !is_valid("2026-02-30") && !is_valid("tomorrow"));
     }
 }
