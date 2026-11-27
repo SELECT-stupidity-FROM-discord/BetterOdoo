@@ -595,11 +595,29 @@ impl Render for BetterOdoo {
         let visible: Vec<Task> = self.visible(cx).into_iter().cloned().collect();
         let people = self.people();
         let projects = self.projects();
-        let overdue = self
-            .tasks
+        let overdue = visible
             .iter()
             .filter(|t| !t.done && date::due(t.deadline.as_deref(), self.today).overdue)
             .count();
+        let mut summary = format!(
+            "{} task{}",
+            visible.len(),
+            if visible.len() == 1 { "" } else { "s" }
+        );
+        if self.project.is_none() {
+            let spread = visible
+                .iter()
+                .map(|t| &t.project)
+                .collect::<std::collections::HashSet<_>>()
+                .len();
+            summary += &format!(
+                " across {spread} project{}",
+                if spread == 1 { "" } else { "s" }
+            );
+        }
+        if overdue > 0 {
+            summary += &format!(" · {overdue} overdue");
+        }
         let filter_focused = self.filter.focus_handle(cx).is_focused(window);
 
         let mut sidebar = div()
@@ -968,12 +986,7 @@ impl Render for BetterOdoo {
                             .font_weight(FontWeight::BOLD)
                             .child(self.project.clone().unwrap_or("My Tasks".into())),
                     )
-                    .child(div().text_color(rgb(MUTED)).child(format!(
-                        "{} tasks across {} projects · {} overdue",
-                        self.tasks.len(),
-                        projects.len(),
-                        overdue
-                    ))),
+                    .child(div().text_color(rgb(MUTED)).child(summary)),
             )
             .child(toolbar)
             .child(
