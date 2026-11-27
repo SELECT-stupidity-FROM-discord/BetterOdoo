@@ -41,7 +41,7 @@ struct BetterOdoo {
     today: i64,
     connect: Option<Entity<ConnectView>>,
     rows_scroll: ScrollHandle,
-    subtasks: HashMap<i64, Option<Vec<SubTask>>>,
+    subtasks: HashMap<i64, Option<Result<Vec<SubTask>, SharedString>>>,
 }
 
 const KEYCHAIN: &str = "BetterOdoo";
@@ -261,10 +261,8 @@ impl BetterOdoo {
                 .spawn(async move { o.subtasks(parent) })
                 .await;
             this.update(cx, |this, cx| {
-                if let Err(e) = &r {
-                    this.status = e.to_string().into();
-                }
-                this.subtasks.insert(parent, Some(r.unwrap_or_default()));
+                this.subtasks
+                    .insert(parent, Some(r.map_err(|e| e.to_string().into())));
                 cx.notify();
             })
             .ok();
@@ -871,8 +869,9 @@ impl BetterOdoo {
         };
         let row = |l: Div, v: Div| div().flex().items_center().min_h(px(26.)).child(l).child(v);
         let kept = self.proposed.iter().filter(|p| p.keep).count();
-        let existing = self.subtasks.get(&t.id).cloned().flatten();
-        let existing = existing.as_ref();
+        let loaded = self.subtasks.get(&t.id).cloned().flatten();
+        let failed = loaded.clone().and_then(|r| r.err());
+        let existing = loaded.as_ref().and_then(|r| r.as_ref().ok());
         let count = existing
             .filter(|s| !s.is_empty())
             .map(|s| (s.iter().filter(|x| x.done).count(), s.len()));
@@ -964,7 +963,15 @@ impl BetterOdoo {
                             ),
                     ),
             )
-            .when(existing.is_none(), |d| {
+            .when_some(failed, |d, e| {
+                d.child(
+                    div()
+                        .text_size(px(13.))
+                        .text_color(rgb(DANGER))
+                        .child(format!("Couldn’t load sub-tasks: {e}")),
+                )
+            })
+            .when(loaded.is_none(), |d| {
                 d.child(
                     div()
                         .text_size(px(13.))

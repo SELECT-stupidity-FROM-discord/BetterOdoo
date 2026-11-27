@@ -210,10 +210,14 @@ impl Odoo {
             .as_object_mut()
             .and_then(|o| o.remove("ids"))
             .map_or(json!([]), |ids| json!([ids]));
-        self.rpc(
+        let r = self.rpc(
             &format!("/web/dataset/call_kw/{model}/{method}"),
             json!({"model": model, "method": method, "args": args, "kwargs": kw}),
-        )
+        );
+        if let Err(e) = &r {
+            eprintln!("{model}.{method}: {e}");
+        }
+        r
     }
 
     pub fn tasks(&self, domain: Value) -> Result<Vec<Task>> {
