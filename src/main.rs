@@ -48,6 +48,7 @@ struct BetterOdoo {
     page: bool,
     people_menu: bool,
     shortcuts: bool,
+    settings: bool,
     stage_filter: HashSet<String>,
     stage_menu: bool,
     people_header_menu: bool,
@@ -81,6 +82,7 @@ impl BetterOdoo {
             page: false,
             people_menu: false,
             shortcuts: false,
+            settings: false,
             stage_filter: HashSet::new(),
             stage_menu: false,
             people_header_menu: false,
@@ -423,7 +425,10 @@ impl BetterOdoo {
             "enter" if !self.proposed.is_empty() => self.commit_work(cx),
             "enter" if n > 0 => self.page = true,
             "escape" if self.people_menu => self.people_menu = false,
-            "escape" if self.shortcuts => self.shortcuts = false,
+            "escape" if self.shortcuts || self.settings => {
+                self.shortcuts = false;
+                self.settings = false
+            }
             "escape" if self.stage_menu => self.stage_menu = false,
             "escape" if self.people_header_menu => self.people_header_menu = false,
             "escape" if !self.proposed.is_empty() => self.proposed.clear(),
@@ -744,6 +749,7 @@ impl Render for BetterOdoo {
         }
         let synced = self.odoo.is_some() && self.status.as_ref() == "Synced just now";
         let was_open = self.shortcuts;
+        let settings_open = self.settings;
         sidebar = sidebar
             .child(project_list)
             .child(
@@ -755,6 +761,7 @@ impl Render for BetterOdoo {
                                 MouseButton::Left,
                                 cx.listener(move |this, _: &MouseDownEvent, _, cx| {
                                     this.shortcuts = !was_open;
+                                    this.settings = false;
                                     cx.notify()
                                 }),
                             ),
@@ -778,8 +785,34 @@ impl Render for BetterOdoo {
                             .rounded_full()
                             .bg(rgb(if synced { SUCCESS } else { MUTED })),
                     )
-                    .child(self.status.clone()),
-            );
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .truncate()
+                            .child(self.status.clone()),
+                    )
+                    .child(
+                        div()
+                            .id("cog")
+                            .flex_none()
+                            .p(px(5.))
+                            .rounded(px(6.))
+                            .cursor_pointer()
+                            .when(settings_open, |d| d.bg(rgb(HOVER)))
+                            .hover(|s| s.bg(rgb(HOVER)))
+                            .child(icon("cog", 16., MUTED))
+                            .on_mouse_down(
+                                MouseButton::Left,
+                                cx.listener(move |this, _: &MouseDownEvent, _, cx| {
+                                    this.settings = !settings_open;
+                                    this.shortcuts = false;
+                                    cx.notify()
+                                }),
+                            ),
+                    ),
+            )
+            .when(settings_open, |d| d.child(self.settings_popover(cx)));
 
         let chip = |id: SharedString, label: String, on: bool| {
             div()
@@ -988,6 +1021,82 @@ impl Render for BetterOdoo {
 }
 
 impl BetterOdoo {
+    fn settings_popover(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let row = |label: &'static str, value: String| {
+            div()
+                .flex()
+                .items_center()
+                .justify_between()
+                .gap(px(12.))
+                .text_size(px(13.))
+                .child(div().text_color(rgb(MUTED)).child(label))
+                .child(div().min_w_0().truncate().child(value))
+        };
+        deferred(
+            anchored()
+                .anchor(Anchor::BottomLeft)
+                .snap_to_window()
+                .offset(point(px(0.), px(-44.)))
+                .child(
+                    popover()
+                        .id("settings")
+                        .occlude()
+                        .w(px(260.))
+                        .p(px(14.))
+                        .flex()
+                        .flex_col()
+                        .gap(px(10.))
+                        .on_mouse_down_out(cx.listener(|this, _: &MouseDownEvent, _, cx| {
+                            this.settings = false;
+                            cx.notify()
+                        }))
+                        .child(
+                            div()
+                                .text_size(px(12.))
+                                .font_weight(FontWeight::MEDIUM)
+                                .text_color(rgb(MUTED))
+                                .child("Settings"),
+                        )
+                        .child(row("Workspace", self.workspace.to_string()))
+                        .child(row("Server", self.version.to_string()))
+                        .child(row("AI model", ai::model()))
+                        .child(div().h(px(1.)).bg(rgb(BORDER)))
+                        .child(
+                            div()
+                                .id("sign-out")
+                                .px(px(8.))
+                                .py(px(6.))
+                                .mx(px(-8.))
+                                .rounded(px(6.))
+                                .cursor_pointer()
+                                .text_size(px(13.))
+                                .text_color(rgb(DANGER))
+                                .hover(|s| s.bg(rgb(HOVER)))
+                                .child("Sign out")
+                                .on_click(cx.listener(|this, _: &ClickEvent, window, cx| {
+                                    this.sign_out(window, cx)
+                                })),
+                        ),
+                ),
+        )
+        .with_priority(1)
+    }
+
+    fn sign_out(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        cx.delete_credentials(KEYCHAIN).detach();
+        self.odoo = None;
+        self.tasks.clear();
+        self.subtasks.clear();
+        self.assignee = None;
+        self.project = None;
+        self.stage_filter.clear();
+        self.page = false;
+        self.settings = false;
+        self.selected = 0;
+        self.reset_ai();
+        self.show_connect(None, window, cx);
+    }
+
     fn shortcuts_popover(&self, people: usize, cx: &mut Context<Self>) -> impl IntoElement {
         let filter = if cfg!(target_os = "macos") {
             "/  ⌘K"
