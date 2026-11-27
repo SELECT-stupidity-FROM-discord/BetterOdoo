@@ -45,8 +45,7 @@ struct BetterOdoo {
     page: bool,
     people_menu: bool,
     shortcuts: bool,
-    hide_done: bool,
-    hidden_stages: HashSet<String>,
+    stage_filter: HashSet<String>,
     stage_menu: bool,
     people_header_menu: bool,
     today: i64,
@@ -76,8 +75,7 @@ impl BetterOdoo {
             page: false,
             people_menu: false,
             shortcuts: false,
-            hide_done: false,
-            hidden_stages: HashSet::new(),
+            stage_filter: HashSet::new(),
             stage_menu: false,
             people_header_menu: false,
             today: date::today(),
@@ -209,8 +207,7 @@ impl BetterOdoo {
                     .is_none_or(|a| t.assignees.contains(a))
             })
             .filter(|t| self.project.as_ref().is_none_or(|p| &t.project == p))
-            .filter(|t| !(self.hide_done && t.done))
-            .filter(|t| !self.hidden_stages.contains(&t.stage))
+            .filter(|t| self.stage_filter.is_empty() || self.stage_filter.contains(&t.stage))
             .filter(|t| {
                 q.is_empty()
                     || t.name.to_lowercase().contains(&q)
@@ -315,12 +312,6 @@ impl BetterOdoo {
         .detach();
     }
 
-    fn toggle_done(&mut self) {
-        self.hide_done = !self.hide_done;
-        self.selected = 0;
-        self.rows_scroll.scroll_to_item(0, ScrollStrategy::Top);
-    }
-
     fn set_assignee(&mut self, who: Option<String>) {
         self.assignee = who;
         self.selected = 0;
@@ -357,7 +348,6 @@ impl BetterOdoo {
             "escape" if self.shortcuts => self.shortcuts = false,
             "escape" if self.stage_menu => self.stage_menu = false,
             "escape" if self.people_header_menu => self.people_header_menu = false,
-            "h" => self.toggle_done(),
             "escape" if !self.proposed.is_empty() => self.proposed.clear(),
             "escape" => self.page = false,
             "0" => self.set_assignee(None),
@@ -385,7 +375,7 @@ fn stage_tone(stage: &str) -> Tone {
         BLUE
     } else if s.contains("review") || s.contains("test") {
         PURPLE
-    } else if s.contains("done") {
+    } else if s.contains("done") || s.contains("complet") {
         GREEN
     } else {
         GRAY
@@ -429,39 +419,76 @@ fn nav_item(
 const TOP_PEOPLE: usize = 5;
 
 fn header_cell(id: &'static str, label: &'static str, active: bool, open: bool) -> Stateful<Div> {
-    let color = if active { TEXT } else { MUTED };
     div()
         .id(id)
         .flex()
         .items_center()
-        .gap(px(4.))
+        .gap(px(6.))
         .px(px(6.))
-        .py(px(2.))
+        .py(px(3.))
         .ml(px(-6.))
-        .rounded(px(4.))
+        .rounded(px(5.))
         .cursor_pointer()
-        .text_color(rgb(color))
+        .text_color(rgb(if active { TEXT } else { MUTED }))
         .when(active, |d| d.font_weight(FontWeight::MEDIUM))
         .when(open, |d| d.bg(rgb(HOVER)))
         .hover(|s| s.bg(rgb(HOVER)))
         .child(label)
-        .when(active, |d| {
-            d.child(div().size(px(5.)).rounded_full().bg(rgb(ACCENT)))
-        })
-        .child(icon("chevron", 12., color))
+        .child(icon("filter", 13., if active { ACCENT } else { MUTED }))
 }
 
-fn toggle(on: bool) -> Div {
+fn menu_header(title: &'static str, clear: Option<Stateful<Div>>) -> Div {
     div()
-        .flex_none()
-        .w(px(26.))
-        .h(px(15.))
-        .rounded_full()
-        .p(px(2.))
         .flex()
-        .when(on, |d| d.justify_end())
-        .bg(rgb(if on { ACCENT } else { BORDER }))
-        .child(div().size(px(11.)).rounded_full().bg(rgb(PAGE)))
+        .items_center()
+        .justify_between()
+        .px(px(10.))
+        .pt(px(8.))
+        .pb(px(6.))
+        .text_size(px(12.))
+        .font_weight(FontWeight::MEDIUM)
+        .text_color(rgb(MUTED))
+        .child(title)
+        .children(clear.map(|c| {
+            c.cursor_pointer()
+                .text_color(rgb(ACCENT))
+                .hover(|s| s.text_color(rgb(TEXT)))
+                .child("Clear")
+        }))
+}
+
+fn menu_row(
+    id: impl Into<gpui::ElementId>,
+    leading: Div,
+    label: String,
+    count: usize,
+    selected: bool,
+) -> Stateful<Div> {
+    div()
+        .id(id)
+        .flex()
+        .items_center()
+        .gap(px(10.))
+        .h(px(32.))
+        .px(px(10.))
+        .rounded(px(6.))
+        .cursor_pointer()
+        .text_size(px(13.))
+        .hover(|s| s.bg(rgb(HOVER)))
+        .child(leading)
+        .child(div().flex_1().min_w_0().truncate().child(label))
+        .child(
+            div()
+                .text_size(px(12.))
+                .text_color(rgb(MUTED))
+                .child(count.to_string()),
+        )
+        .child(
+            div()
+                .flex_none()
+                .size(px(14.))
+                .when(selected, |d| d.child(icon("check", 14., ACCENT))),
+        )
 }
 
 fn short_name(name: &str) -> &str {
@@ -773,7 +800,7 @@ impl Render for BetterOdoo {
             .child(div().flex_1().min_w(px(160.)).child("Name"))
             .child({
                 let open = self.stage_menu;
-                let active = self.hide_done || !self.hidden_stages.is_empty();
+                let active = !self.stage_filter.is_empty();
                 div()
                     .flex_none()
                     .w(px(COLS[0]))
@@ -792,6 +819,7 @@ impl Render for BetterOdoo {
                 let open = self.people_header_menu;
                 div()
                     .flex_none()
+                    .flex()
                     .w(px(COLS[1]))
                     .child(
                         header_cell("h-people", "Assignees", self.assignee.is_some(), open)
@@ -895,7 +923,6 @@ impl BetterOdoo {
             (people.as_str(), "Filter by person"),
             ("0", "Everyone"),
             (filter, "Filter tasks"),
-            ("h", "Hide completed"),
             ("s", "Suggest sub-tasks with AI"),
             ("?", "Show shortcuts"),
         ];
@@ -948,47 +975,28 @@ impl BetterOdoo {
         }
         stages.sort_by_key(|(s, n)| (std::cmp::Reverse(*n), s.to_lowercase()));
         let items = stages.into_iter().enumerate().map(|(i, (stage, n))| {
-            let shown = !self.hidden_stages.contains(&stage);
-            let check = div()
+            let dot = div()
                 .flex_none()
-                .size(px(15.))
-                .rounded(px(3.))
-                .flex()
-                .items_center()
-                .justify_center();
-            let check = if shown {
-                check.bg(rgb(TEXT)).child(icon("check", 11., PAGE))
-            } else {
-                check.border_1().border_color(rgb(MUTED))
-            };
-            div()
-                .id(("stage", i))
-                .flex()
-                .items_center()
-                .gap(px(10.))
-                .px(px(8.))
-                .py(px(6.))
-                .rounded(px(6.))
-                .cursor_pointer()
-                .hover(|s| s.bg(rgb(HOVER)))
-                .child(check)
-                .child(div().flex_1().min_w_0().truncate().child(tag(
-                    stage.clone(),
-                    stage_tone(&stage),
-                    12.,
-                )))
-                .child(
-                    div()
-                        .text_size(px(12.))
-                        .text_color(rgb(MUTED))
-                        .child(n.to_string()),
-                )
-                .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
-                    if !this.hidden_stages.remove(&stage) {
-                        this.hidden_stages.insert(stage.clone());
+                .size(px(8.))
+                .rounded_full()
+                .bg(rgb(stage_tone(&stage).fg));
+            let selected = self.stage_filter.contains(&stage);
+            menu_row(("stage", i), dot, stage.clone(), n, selected).on_click(cx.listener(
+                move |this, _: &ClickEvent, _, cx| {
+                    if !this.stage_filter.remove(&stage) {
+                        this.stage_filter.insert(stage.clone());
                     }
                     this.selected = 0;
                     this.rows_scroll.scroll_to_item(0, ScrollStrategy::Top);
+                    cx.notify()
+                },
+            ))
+        });
+        let clear = (!self.stage_filter.is_empty()).then(|| {
+            div()
+                .id("stages-clear")
+                .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                    this.stage_filter.clear();
                     cx.notify()
                 }))
         });
@@ -1000,50 +1008,15 @@ impl BetterOdoo {
                     popover()
                         .id("stage-menu")
                         .occlude()
-                        .w(px(300.))
+                        .w(px(260.))
                         .max_h(px(380.))
                         .overflow_y_scroll()
-                        .p(px(6.))
+                        .p(px(4.))
                         .on_mouse_down_out(cx.listener(|this, _: &MouseDownEvent, _, cx| {
                             this.stage_menu = false;
                             cx.notify()
                         }))
-                        .child(
-                            div()
-                                .id("hide-done")
-                                .flex()
-                                .items_center()
-                                .gap(px(10.))
-                                .px(px(8.))
-                                .py(px(6.))
-                                .rounded(px(6.))
-                                .cursor_pointer()
-                                .hover(|s| s.bg(rgb(HOVER)))
-                                .child(toggle(self.hide_done))
-                                .child(div().flex_1().child("Hide completed"))
-                                .child(kbd("h"))
-                                .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
-                                    this.toggle_done();
-                                    cx.notify()
-                                })),
-                        )
-                        .child(div().h(px(1.)).my(px(4.)).bg(rgb(BORDER)))
-                        .child(
-                            div()
-                                .id("stages-all")
-                                .px(px(8.))
-                                .py(px(6.))
-                                .rounded(px(6.))
-                                .cursor_pointer()
-                                .text_size(px(13.))
-                                .text_color(rgb(TEXT_SOFT))
-                                .hover(|s| s.bg(rgb(HOVER)))
-                                .child("Show all stages")
-                                .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
-                                    this.hidden_stages.clear();
-                                    cx.notify()
-                                })),
-                        )
+                        .child(menu_header("Show stages", clear))
                         .children(items),
                 ),
         )
@@ -1065,49 +1038,39 @@ impl BetterOdoo {
             })
             .collect();
         let items = rest.iter().enumerate().map(|(i, p)| {
-            let on = self.assignee.as_ref() == Some(p);
             let tone = PEOPLE[all.iter().position(|x| x == p).unwrap_or(i) % PEOPLE.len()];
-            let who = p.clone();
-            div()
-                .id(("person", i))
+            let avatar = div()
+                .flex_none()
+                .size(px(20.))
+                .rounded_full()
+                .bg(rgb(tone.bg))
+                .text_color(rgb(tone.fg))
+                .text_size(px(10.))
+                .font_weight(FontWeight::SEMIBOLD)
                 .flex()
                 .items_center()
-                .gap(px(10.))
-                .px(px(8.))
-                .py(px(6.))
-                .rounded(px(6.))
-                .cursor_pointer()
-                .hover(|s| s.bg(rgb(HOVER)))
-                .when(on, |d| d.bg(rgb(HOVER)))
-                .child(
-                    div()
-                        .flex_none()
-                        .size(px(22.))
-                        .rounded_full()
-                        .bg(rgb(tone.bg))
-                        .text_color(rgb(tone.fg))
-                        .text_size(px(11.))
-                        .font_weight(FontWeight::SEMIBOLD)
-                        .flex()
-                        .items_center()
-                        .justify_center()
-                        .child(p.chars().next().unwrap_or('?').to_uppercase().to_string()),
-                )
-                .child(
-                    div()
-                        .flex_1()
-                        .min_w_0()
-                        .truncate()
-                        .child(short_name(p).to_string()),
-                )
-                .child(
-                    div()
-                        .text_size(px(12.))
-                        .text_color(rgb(MUTED))
-                        .child(counts.get(p).copied().unwrap_or(0).to_string()),
-                )
-                .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
-                    this.set_assignee(Some(who.clone()));
+                .justify_center()
+                .child(p.chars().next().unwrap_or('?').to_uppercase().to_string());
+            let who = p.clone();
+            menu_row(
+                ("person", i),
+                avatar,
+                short_name(p).to_string(),
+                counts.get(p).copied().unwrap_or(0),
+                self.assignee.as_ref() == Some(p),
+            )
+            .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                this.set_assignee(Some(who.clone()));
+                this.people_menu = false;
+                this.people_header_menu = false;
+                cx.notify()
+            }))
+        });
+        let clear = self.assignee.is_some().then(|| {
+            div()
+                .id("people-clear")
+                .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                    this.set_assignee(None);
                     this.people_menu = false;
                     this.people_header_menu = false;
                     cx.notify()
@@ -1121,15 +1084,16 @@ impl BetterOdoo {
                     popover()
                         .id("people-menu")
                         .occlude()
-                        .w(px(280.))
+                        .w(px(260.))
                         .max_h(px(340.))
                         .overflow_y_scroll()
-                        .p(px(6.))
+                        .p(px(4.))
                         .on_mouse_down_out(cx.listener(|this, _: &MouseDownEvent, _, cx| {
                             this.people_menu = false;
                             this.people_header_menu = false;
                             cx.notify()
                         }))
+                        .child(menu_header("Filter by assignee", clear))
                         .children(items),
                 ),
         )
