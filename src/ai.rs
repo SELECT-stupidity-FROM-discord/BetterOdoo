@@ -6,7 +6,7 @@ use std::env::var;
 
 fn chat(system: &str, user: &str) -> Result<Value> {
     let base = var("AI_BASE_URL").unwrap_or("http://localhost:11434/v1".into());
-    let model = var("AI_MODEL").unwrap_or("llama3.2".into());
+    let model = var("AI_MODEL").unwrap_or("qwen2.5:7b".into());
     let mut req = ureq::post(format!("{base}/chat/completions"));
     if let Ok(k) = var("AI_API_KEY") {
         req = req.header("Authorization", &format!("Bearer {k}"));
