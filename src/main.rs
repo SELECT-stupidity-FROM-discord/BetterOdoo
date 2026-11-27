@@ -10,14 +10,14 @@ mod ui;
 use connect::{ConnectView, Connected};
 use gpui::{
     App, Bounds, BoxShadow, ClickEvent, Context, Div, Entity, FocusHandle, Focusable, FontWeight,
-    HighlightStyle, KeyDownEvent, ScrollHandle, SharedString, Stateful, StyledText,
-    TitlebarOptions, Window, WindowBounds, WindowOptions, black, div, point, prelude::*, px, rgb,
-    size, white,
+    HighlightStyle, KeyDownEvent, ScrollStrategy, SharedString, Stateful, StyledText,
+    TitlebarOptions, UniformListScrollHandle, Window, WindowBounds, WindowOptions, black, div,
+    point, prelude::*, px, rgb, size, uniform_list, white,
 };
 use input::{InputEvent, TextInput};
 use odoo::{Login, Odoo, SubTask, Task};
 use serde_json::json;
-use std::{collections::HashMap, sync::Arc};
+use std::{collections::HashMap, ops::Range, sync::Arc};
 use theme::*;
 use ui::{icon, tag};
 
@@ -40,7 +40,7 @@ struct BetterOdoo {
     proposed: Vec<Proposal>,
     today: i64,
     connect: Option<Entity<ConnectView>>,
-    rows_scroll: ScrollHandle,
+    rows_scroll: UniformListScrollHandle,
     subtasks: HashMap<i64, Option<Result<Vec<SubTask>, SharedString>>>,
 }
 
@@ -64,7 +64,7 @@ impl BetterOdoo {
             proposed: vec![],
             today: date::today(),
             connect: None,
-            rows_scroll: ScrollHandle::new(),
+            rows_scroll: UniformListScrollHandle::new(),
             subtasks: HashMap::new(),
         };
         me.restore(window, cx);
@@ -169,7 +169,7 @@ impl BetterOdoo {
         match ev {
             InputEvent::Changed => {
                 self.selected = 0;
-                self.rows_scroll.scroll_to_item(0);
+                self.rows_scroll.scroll_to_item(0, ScrollStrategy::Top);
                 self.proposed.clear();
             }
             InputEvent::Submit => window.focus(&self.focus, cx),
@@ -299,7 +299,7 @@ impl BetterOdoo {
     fn set_assignee(&mut self, who: Option<String>) {
         self.assignee = who;
         self.selected = 0;
-        self.rows_scroll.scroll_to_item(0);
+        self.rows_scroll.scroll_to_item(0, ScrollStrategy::Top);
         self.proposed.clear();
     }
 
@@ -332,7 +332,8 @@ impl BetterOdoo {
             }
             _ => return,
         }
-        self.rows_scroll.scroll_to_item(self.selected);
+        self.rows_scroll
+            .scroll_to_item(self.selected, ScrollStrategy::Nearest);
         cx.notify();
     }
 }
@@ -399,8 +400,6 @@ impl Render for BetterOdoo {
         }
         let visible: Vec<Task> = self.visible(cx).into_iter().cloned().collect();
         let people = self.people();
-        let tone_of =
-            |name: &str| PEOPLE[people.iter().position(|p| p == name).unwrap_or(0) % PEOPLE.len()];
         let projects = self.projects();
         let overdue = self
             .tasks
@@ -545,7 +544,7 @@ impl Render for BetterOdoo {
                     .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
                         this.project = Some(name.clone());
                         this.selected = 0;
-                        this.rows_scroll.scroll_to_item(0);
+                        this.rows_scroll.scroll_to_item(0, ScrollStrategy::Top);
                         this.proposed.clear();
                         cx.notify()
                     })),
@@ -653,92 +652,6 @@ impl Render for BetterOdoo {
                     .map(|(l, w)| div().flex_none().w(px(w)).child(*l)),
             );
 
-        let rows = visible.iter().enumerate().map(|(i, t)| {
-            let on = i == self.selected;
-            let due = date::due(t.deadline.as_deref(), self.today);
-            div()
-                .id(("row", i))
-                .flex()
-                .items_center()
-                .gap(px(12.))
-                .px(px(10.))
-                .py(px(8.))
-                .min_h(px(44.))
-                .border_t_1()
-                .border_color(rgb(ROW_RULE))
-                .cursor_pointer()
-                .when(on, |d| d.bg(rgb(HOVER)).rounded(px(6.)))
-                .when(!on, |d| d.hover(|s| s.bg(rgb(SIDEBAR))))
-                .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| {
-                    this.selected = i;
-                    this.proposed.clear();
-                    window.focus(&this.focus, cx);
-                    cx.notify()
-                }))
-                .child(
-                    div()
-                        .flex_1()
-                        .min_w(px(160.))
-                        .flex()
-                        .items_center()
-                        .gap(px(8.))
-                        .child(
-                            div()
-                                .min_w_0()
-                                .truncate()
-                                .font_weight(FontWeight::MEDIUM)
-                                .child(t.name.clone()),
-                        )
-                        .when(t.priority_high, |d| {
-                            d.child(tag("High", ORANGE, 11.).px(px(6.)).py(px(1.)))
-                        }),
-                )
-                .child(div().flex_none().flex().w(px(COLS[0])).child(tag(
-                    t.stage.clone(),
-                    stage_tone(&t.stage),
-                    12.,
-                )))
-                .child(div().flex_none().w(px(COLS[1])).flex().children(
-                    t.assignees.iter().enumerate().map(|(j, p)| {
-                        let tone = tone_of(p);
-                        div()
-                            .size(px(24.))
-                            .rounded_full()
-                            .border_2()
-                            .border_color(white())
-                            .bg(rgb(tone.bg))
-                            .text_color(rgb(tone.fg))
-                            .text_size(px(11.))
-                            .font_weight(FontWeight::SEMIBOLD)
-                            .flex()
-                            .items_center()
-                            .justify_center()
-                            .when(j > 0, |d| d.ml(px(-8.)))
-                            .child(p.chars().next().unwrap_or('?').to_string())
-                    }),
-                ))
-                .child(
-                    div()
-                        .flex_none()
-                        .w(px(COLS[2]))
-                        .truncate()
-                        .text_size(px(13.))
-                        .text_color(rgb(TEXT_SOFT))
-                        .child(t.project.clone()),
-                )
-                .child(
-                    div()
-                        .flex_none()
-                        .w(px(COLS[3]))
-                        .text_size(px(13.))
-                        .when(due.overdue, |d| {
-                            d.text_color(rgb(DANGER)).font_weight(FontWeight::MEDIUM)
-                        })
-                        .when(!due.overdue, |d| d.text_color(rgb(TEXT_SOFT)))
-                        .child(due.label),
-                )
-        });
-
         let key = |k: String, label: &str| {
             div()
                 .flex()
@@ -787,14 +700,15 @@ impl Render for BetterOdoo {
                     .min_h_0()
                     .child(header_row)
                     .child(
-                        div()
-                            .id("rows")
-                            .track_scroll(&self.rows_scroll)
-                            .flex()
-                            .flex_col()
-                            .flex_1()
-                            .overflow_y_scroll()
-                            .children(rows),
+                        uniform_list(
+                            "rows",
+                            visible.len(),
+                            cx.processor(|this, range: Range<usize>, _, cx| {
+                                this.render_rows(range, cx)
+                            }),
+                        )
+                        .track_scroll(&self.rows_scroll)
+                        .flex_1(),
                     ),
             )
             .child(
@@ -831,6 +745,103 @@ impl Render for BetterOdoo {
 }
 
 impl BetterOdoo {
+    fn render_rows(&mut self, range: Range<usize>, cx: &mut Context<Self>) -> Vec<Stateful<Div>> {
+        let visible: Vec<Task> = self.visible(cx).into_iter().cloned().collect();
+        let people = self.people();
+        let tone_of =
+            |name: &str| PEOPLE[people.iter().position(|p| p == name).unwrap_or(0) % PEOPLE.len()];
+        let range = range.start.min(visible.len())..range.end.min(visible.len());
+        visible[range.clone()]
+            .iter()
+            .zip(range)
+            .map(|(t, i)| {
+                let on = i == self.selected;
+                let due = date::due(t.deadline.as_deref(), self.today);
+                div()
+                    .id(("row", i))
+                    .flex()
+                    .items_center()
+                    .gap(px(12.))
+                    .px(px(10.))
+                    .py(px(8.))
+                    .min_h(px(44.))
+                    .border_t_1()
+                    .border_color(rgb(ROW_RULE))
+                    .cursor_pointer()
+                    .when(on, |d| d.bg(rgb(HOVER)).rounded(px(6.)))
+                    .when(!on, |d| d.hover(|s| s.bg(rgb(SIDEBAR))))
+                    .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| {
+                        this.selected = i;
+                        this.proposed.clear();
+                        window.focus(&this.focus, cx);
+                        cx.notify()
+                    }))
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w(px(160.))
+                            .flex()
+                            .items_center()
+                            .gap(px(8.))
+                            .child(
+                                div()
+                                    .min_w_0()
+                                    .truncate()
+                                    .font_weight(FontWeight::MEDIUM)
+                                    .child(t.name.clone()),
+                            )
+                            .when(t.priority_high, |d| {
+                                d.child(tag("High", ORANGE, 11.).px(px(6.)).py(px(1.)))
+                            }),
+                    )
+                    .child(div().flex_none().flex().w(px(COLS[0])).child(tag(
+                        t.stage.clone(),
+                        stage_tone(&t.stage),
+                        12.,
+                    )))
+                    .child(div().flex_none().w(px(COLS[1])).flex().children(
+                        t.assignees.iter().enumerate().map(|(j, p)| {
+                            let tone = tone_of(p);
+                            div()
+                                .size(px(24.))
+                                .rounded_full()
+                                .border_2()
+                                .border_color(white())
+                                .bg(rgb(tone.bg))
+                                .text_color(rgb(tone.fg))
+                                .text_size(px(11.))
+                                .font_weight(FontWeight::SEMIBOLD)
+                                .flex()
+                                .items_center()
+                                .justify_center()
+                                .when(j > 0, |d| d.ml(px(-8.)))
+                                .child(p.chars().next().unwrap_or('?').to_string())
+                        }),
+                    ))
+                    .child(
+                        div()
+                            .flex_none()
+                            .w(px(COLS[2]))
+                            .truncate()
+                            .text_size(px(13.))
+                            .text_color(rgb(TEXT_SOFT))
+                            .child(t.project.clone()),
+                    )
+                    .child(
+                        div()
+                            .flex_none()
+                            .w(px(COLS[3]))
+                            .text_size(px(13.))
+                            .when(due.overdue, |d| {
+                                d.text_color(rgb(DANGER)).font_weight(FontWeight::MEDIUM)
+                            })
+                            .when(!due.overdue, |d| d.text_color(rgb(TEXT_SOFT)))
+                            .child(due.label),
+                    )
+            })
+            .collect()
+    }
+
     fn detail(&self, task: Option<&Task>, cx: &mut Context<Self>) -> Stateful<Div> {
         let panel = div()
             .id("detail")
