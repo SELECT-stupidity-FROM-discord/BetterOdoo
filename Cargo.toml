@@ -4,7 +4,8 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-gpui = "0.2.2"
+gpui = { git = "https://github.com/zed-industries/zed", rev = "ed8dc1b6ca115f3ce70117ebb448dfb61ea030bf" }
+gpui_platform = { git = "https://github.com/zed-industries/zed", rev = "ed8dc1b6ca115f3ce70117ebb448dfb61ea030bf", default-features = false, features = ["font-kit", "wayland", "x11"] }
 ureq = { version = "3", features = ["json", "cookies"] }
 serde_json = "1"
 anyhow = "1"

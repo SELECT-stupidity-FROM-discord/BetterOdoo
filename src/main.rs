@@ -2,8 +2,8 @@ mod ai;
 mod odoo;
 
 use gpui::{
-    App, Application, Bounds, Context, FocusHandle, KeyDownEvent, SharedString, Window,
-    WindowBounds, WindowOptions, div, prelude::*, px, rgb, size,
+    App, Bounds, Context, FocusHandle, KeyDownEvent, SharedString, Window, WindowBounds,
+    WindowOptions, div, prelude::*, px, rgb, size,
 };
 use odoo::{Odoo, Task};
 use serde_json::json;
@@ -338,7 +338,7 @@ impl Render for BetterOdoo {
 }
 
 fn main() {
-    Application::new().run(|cx: &mut App| {
+    gpui_platform::application().run(|cx: &mut App| {
         let bounds = Bounds::centered(None, size(px(1200.), px(760.)), cx);
         cx.open_window(
             WindowOptions {
@@ -347,7 +347,8 @@ fn main() {
             },
             |window, cx| {
                 let view = cx.new(BetterOdoo::new);
-                window.focus(&view.read(cx).focus);
+                let focus = view.read(cx).focus.clone();
+                window.focus(&focus, cx);
                 view
             },
         )
