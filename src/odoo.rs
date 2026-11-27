@@ -15,6 +15,7 @@ pub struct Task {
     pub name: String,
     pub project: String,
     pub project_id: Option<i64>,
+    pub parent: Option<(i64, String)>,
     pub stage: String,
     pub assignees: Vec<String>,
     pub deadline: Option<String>,
@@ -234,6 +235,7 @@ impl Odoo {
         let fields = [
             "name",
             "project_id",
+            "parent_id",
             "stage_id",
             "user_ids",
             "date_deadline",
@@ -304,6 +306,10 @@ impl Odoo {
                 name: r["name"].as_str().unwrap_or("").into(),
                 project: m2o(&r["project_id"]),
                 project_id: r["project_id"].get(0).and_then(|v| v.as_i64()),
+                parent: r["parent_id"]
+                    .get(0)
+                    .and_then(|v| v.as_i64())
+                    .map(|id| (id, m2o(&r["parent_id"]))),
                 stage: m2o(&r["stage_id"]),
                 assignees: r["user_ids"]
                     .as_array()

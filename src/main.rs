@@ -8,6 +8,7 @@ mod ollama;
 mod settings;
 mod settings_view;
 mod theme;
+mod tree;
 mod ui;
 
 use connect::{ConnectView, Connected};
