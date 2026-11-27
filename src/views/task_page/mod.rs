@@ -369,8 +369,14 @@ impl Render for TaskPage {
                                     .child(div().child(hours(t.logged_hours))),
                             ),
                     )
-                    .child(self.tabs(&subs, cx))
-                    .child(body),
+                    .child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .gap(px(8.))
+                            .child(self.tabs(&subs, cx))
+                            .child(body),
+                    ),
             )
     }
 }

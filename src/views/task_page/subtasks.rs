@@ -192,7 +192,9 @@ impl Render for SubtaskList {
             .flex()
             .flex_col()
             .gap(px(12.))
-            .child(self.entries.clone())
+            .when(self.entries.read(cx).is_open(), |d| {
+                d.child(self.entries.clone())
+            })
             .child(
                 div().flex().flex_col().children(
                     subs.iter()
