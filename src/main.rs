@@ -9,10 +9,10 @@ mod ui;
 
 use connect::{ConnectView, Connected};
 use gpui::{
-    App, Bounds, BoxShadow, ClickEvent, Context, Div, Entity, FocusHandle, Focusable, FontWeight,
+    App, Bounds, ClickEvent, Context, Div, Entity, FocusHandle, Focusable, FontWeight,
     HighlightStyle, KeyDownEvent, ScrollStrategy, SharedString, Stateful, StyledText,
-    TitlebarOptions, UniformListScrollHandle, Window, WindowBounds, WindowOptions, black, div,
-    point, prelude::*, px, rgb, size, uniform_list, white,
+    TitlebarOptions, UniformListScrollHandle, Window, WindowBounds, WindowOptions, div, prelude::*,
+    px, rgb, size, uniform_list, white,
 };
 use input::{InputEvent, TextInput};
 use odoo::{Login, Odoo, SubTask, Task};
@@ -38,6 +38,7 @@ struct BetterOdoo {
     selected: usize,
     status: SharedString,
     proposed: Vec<Proposal>,
+    page: bool,
     today: i64,
     connect: Option<Entity<ConnectView>>,
     rows_scroll: UniformListScrollHandle,
@@ -62,6 +63,7 @@ impl BetterOdoo {
             selected: 0,
             status: "Connecting…".into(),
             proposed: vec![],
+            page: false,
             today: date::today(),
             connect: None,
             rows_scroll: UniformListScrollHandle::new(),
@@ -322,7 +324,9 @@ impl BetterOdoo {
             }
             "s" => self.suggest_subtasks(cx),
             "enter" if !self.proposed.is_empty() => self.commit_subtasks(cx),
-            "escape" => self.proposed.clear(),
+            "enter" if n > 0 => self.page = true,
+            "escape" if !self.proposed.is_empty() => self.proposed.clear(),
+            "escape" => self.page = false,
             "0" => self.set_assignee(None),
             d if d.len() == 1 && d.as_bytes()[0].is_ascii_digit() => {
                 let p = self.people().get(d.parse::<usize>().unwrap() - 1).cloned();
@@ -489,6 +493,7 @@ impl Render for BetterOdoo {
                 )
                 .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
                     this.project = None;
+                    this.page = false;
                     this.selected = 0;
                     cx.notify()
                 })),
@@ -543,6 +548,7 @@ impl Render for BetterOdoo {
                     .child(div().truncate().child(p.clone()))
                     .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
                         this.project = Some(name.clone());
+                        this.page = false;
                         this.selected = 0;
                         this.rows_scroll.scroll_to_item(0, ScrollStrategy::Top);
                         this.proposed.clear();
@@ -719,14 +725,19 @@ impl Render for BetterOdoo {
                     .text_size(px(12.))
                     .text_color(rgb(MUTED))
                     .child(key("j k".into(), "move"))
+                    .child(key("↵".into(), "open"))
                     .child(key(format!("1–{}", people.len().clamp(1, 9)), "assignee"))
                     .child(key("s".into(), "AI sub-tasks")),
             );
 
-        if let Some(id) = visible.get(self.selected).map(|t| t.id) {
+        let selected = visible.get(self.selected).filter(|_| self.page);
+        if let Some(id) = selected.map(|t| t.id) {
             self.ensure_subtasks(id, cx);
         }
-        let detail = self.detail(visible.get(self.selected), cx);
+        let content = match selected {
+            Some(t) => self.detail(t, cx).into_any_element(),
+            None => main.into_any_element(),
+        };
 
         div()
             .track_focus(&self.focus)
@@ -738,8 +749,7 @@ impl Render for BetterOdoo {
             .font_family(FONT)
             .text_size(px(14.))
             .child(sidebar)
-            .child(main)
-            .child(detail)
+            .child(content)
             .into_any_element()
     }
 }
@@ -773,6 +783,7 @@ impl BetterOdoo {
                     .when(!on, |d| d.hover(|s| s.bg(rgb(SIDEBAR))))
                     .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| {
                         this.selected = i;
+                        this.page = true;
                         this.proposed.clear();
                         window.focus(&this.focus, cx);
                         cx.notify()
@@ -852,30 +863,15 @@ impl BetterOdoo {
             .collect()
     }
 
-    fn detail(&self, task: Option<&Task>, cx: &mut Context<Self>) -> Stateful<Div> {
+    fn detail(&self, t: &Task, cx: &mut Context<Self>) -> Stateful<Div> {
         let panel = div()
-            .id("detail")
-            .overflow_y_scroll()
             .flex()
             .flex_col()
-            .flex_none()
-            .w(px(380.))
-            .h_full()
-            .py(px(40.))
-            .px(px(32.))
-            .gap(px(18.))
-            .border_l_1()
-            .border_color(rgb(BORDER))
-            .shadow(vec![BoxShadow {
-                color: black().opacity(0.03),
-                offset: point(px(-8.), px(0.)),
-                blur_radius: px(24.),
-                spread_radius: px(0.),
-                inset: false,
-            }]);
-        let Some(t) = task else {
-            return panel.child(div().text_color(rgb(MUTED)).child("No task selected"));
-        };
+            .w_full()
+            .max_w(px(760.))
+            .pt(px(40.))
+            .pb(px(64.))
+            .gap(px(18.));
         let due = date::due(t.deadline.as_deref(), self.today);
         let prop = |icon_name: &str, label: &str| {
             div()
@@ -897,160 +893,184 @@ impl BetterOdoo {
             .filter(|s| !s.is_empty())
             .map(|s| (s.iter().filter(|x| x.done).count(), s.len()));
 
-        panel
-            .child(
-                div()
-                    .text_size(px(12.))
-                    .text_color(rgb(MUTED))
-                    .child(format!("{} / #{}", t.project, t.id)),
-            )
-            .child(
-                div()
-                    .text_size(px(26.))
-                    .font_weight(FontWeight::BOLD)
-                    .line_height(px(32.))
-                    .child(t.name.clone()),
-            )
-            .child(
-                div()
-                    .flex()
-                    .flex_col()
-                    .gap(px(10.))
-                    .child(row(
-                        prop("status", "Status"),
-                        div()
-                            .flex()
-                            .child(tag(t.stage.clone(), stage_tone(&t.stage), 12.)),
-                    ))
-                    .child(row(
-                        prop("user", "Assignees"),
-                        div().child(t.assignees.join(", ")),
-                    ))
-                    .child(row(
-                        prop("calendar", "Due"),
-                        div()
-                            .when(due.overdue, |d| d.text_color(rgb(DANGER)))
-                            .child(due.label),
-                    ))
-                    .child(row(
-                        prop("clock", "Logged"),
-                        div().child(hours(t.logged_hours)),
-                    )),
-            )
-            .child(div().h(px(1.)).bg(rgb(BORDER)))
-            .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .justify_between()
-                    .child(
-                        div()
-                            .flex()
-                            .items_baseline()
-                            .gap(px(8.))
-                            .child(div().font_weight(FontWeight::SEMIBOLD).child("Sub-tasks"))
-                            .when_some(count, |d, (done, total)| {
-                                d.child(
-                                    div()
-                                        .text_size(px(12.))
-                                        .text_color(rgb(MUTED))
-                                        .child(format!("{done}/{total} done")),
-                                )
-                            }),
-                    )
-                    .child(
-                        div()
-                            .id("suggest")
-                            .flex()
-                            .items_center()
-                            .gap(px(6.))
-                            .px(px(10.))
-                            .py(px(6.))
-                            .min_h(px(32.))
-                            .rounded(px(6.))
-                            .border_1()
-                            .border_color(rgb(AI_BORDER))
-                            .bg(rgb(PURPLE.bg))
-                            .text_color(rgb(PURPLE.fg))
-                            .text_size(px(13.))
-                            .font_weight(FontWeight::MEDIUM)
-                            .cursor_pointer()
-                            .child(icon("sparkle", 14., PURPLE.fg))
-                            .child("Suggest with AI")
-                            .on_click(
-                                cx.listener(|this, _: &ClickEvent, _, cx| {
-                                    this.suggest_subtasks(cx)
-                                }),
-                            ),
-                    ),
-            )
-            .when_some(failed, |d, e| {
-                d.child(
+        let inner =
+            panel
+                .child(
                     div()
-                        .text_size(px(13.))
-                        .text_color(rgb(DANGER))
-                        .child(format!("Couldn’t load sub-tasks: {e}")),
-                )
-            })
-            .when(loaded.is_none(), |d| {
-                d.child(
-                    div()
-                        .text_size(px(13.))
+                        .flex()
+                        .gap(px(6.))
+                        .text_size(px(12.))
                         .text_color(rgb(MUTED))
-                        .child("Loading sub-tasks…"),
+                        .child(
+                            div()
+                                .id("back")
+                                .cursor_pointer()
+                                .hover(|s| s.text_color(rgb(TEXT)))
+                                .child(self.project.clone().unwrap_or("My Tasks".into()))
+                                .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                                    this.page = false;
+                                    this.proposed.clear();
+                                    cx.notify()
+                                })),
+                        )
+                        .child(format!("/ {} / #{}", t.project, t.id)),
                 )
-            })
-            .when_some(existing.filter(|s| !s.is_empty()), |d, subs| {
-                d.child(
+                .child(
+                    div()
+                        .text_size(px(32.))
+                        .font_weight(FontWeight::BOLD)
+                        .line_height(px(40.))
+                        .child(t.name.clone()),
+                )
+                .child(
                     div()
                         .flex()
                         .flex_col()
-                        .gap(px(8.))
-                        .children(subs.iter().map(|s| {
-                            let check = div()
-                                .flex_none()
-                                .mt(px(2.))
-                                .size(px(15.))
-                                .rounded(px(3.))
+                        .gap(px(10.))
+                        .child(row(
+                            prop("status", "Status"),
+                            div()
+                                .flex()
+                                .child(tag(t.stage.clone(), stage_tone(&t.stage), 12.)),
+                        ))
+                        .child(row(
+                            prop("user", "Assignees"),
+                            div().child(t.assignees.join(", ")),
+                        ))
+                        .child(row(
+                            prop("calendar", "Due"),
+                            div()
+                                .when(due.overdue, |d| d.text_color(rgb(DANGER)))
+                                .child(due.label),
+                        ))
+                        .child(row(
+                            prop("clock", "Logged"),
+                            div().child(hours(t.logged_hours)),
+                        )),
+                )
+                .child(div().h(px(1.)).bg(rgb(BORDER)))
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .justify_between()
+                        .child(
+                            div()
+                                .flex()
+                                .items_baseline()
+                                .gap(px(8.))
+                                .child(div().font_weight(FontWeight::SEMIBOLD).child("Sub-tasks"))
+                                .when_some(count, |d, (done, total)| {
+                                    d.child(
+                                        div()
+                                            .text_size(px(12.))
+                                            .text_color(rgb(MUTED))
+                                            .child(format!("{done}/{total} done")),
+                                    )
+                                }),
+                        )
+                        .child(
+                            div()
+                                .id("suggest")
                                 .flex()
                                 .items_center()
-                                .justify_center();
-                            let check = if s.done {
-                                check.bg(rgb(SUCCESS)).child(icon("check", 11., PAGE))
-                            } else {
-                                check.border_1().border_color(rgb(MUTED))
-                            };
-                            div().flex().items_start().gap(px(10.)).child(check).child(
-                                div()
-                                    .flex_1()
-                                    .min_w_0()
-                                    .text_color(rgb(if s.done { MUTED } else { TEXT }))
-                                    .child(s.name.clone()),
-                            )
-                        })),
+                                .gap(px(6.))
+                                .px(px(10.))
+                                .py(px(6.))
+                                .min_h(px(32.))
+                                .rounded(px(6.))
+                                .border_1()
+                                .border_color(rgb(AI_BORDER))
+                                .bg(rgb(PURPLE.bg))
+                                .text_color(rgb(PURPLE.fg))
+                                .text_size(px(13.))
+                                .font_weight(FontWeight::MEDIUM)
+                                .cursor_pointer()
+                                .child(icon("sparkle", 14., PURPLE.fg))
+                                .child("Suggest with AI")
+                                .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                                    this.suggest_subtasks(cx)
+                                })),
+                        ),
                 )
-            })
-            .when(
-                self.proposed.is_empty() && existing.is_some_and(|s| s.is_empty()),
-                |d| {
-                    let text =
-                        "No sub-tasks yet. Press s and AI will draft a few for you to review.";
-                    let key = text.find(" s ").map_or(0..0, |i| i + 1..i + 2);
-                    d.child(div().text_size(px(13.)).text_color(rgb(MUTED)).child(
-                        StyledText::new(text).with_highlights([(
-                            key,
-                            HighlightStyle {
-                                color: Some(rgb(TEXT).into()),
-                                font_weight: Some(FontWeight::SEMIBOLD),
-                                ..Default::default()
-                            },
-                        )]),
-                    ))
-                },
-            )
-            .when(!self.proposed.is_empty(), |d| {
-                d.child(self.proposal(kept, cx))
-            })
+                .when_some(failed, |d, e| {
+                    d.child(
+                        div()
+                            .text_size(px(13.))
+                            .text_color(rgb(DANGER))
+                            .child(format!("Couldn’t load sub-tasks: {e}")),
+                    )
+                })
+                .when(loaded.is_none(), |d| {
+                    d.child(
+                        div()
+                            .text_size(px(13.))
+                            .text_color(rgb(MUTED))
+                            .child("Loading sub-tasks…"),
+                    )
+                })
+                .when_some(existing.filter(|s| !s.is_empty()), |d, subs| {
+                    d.child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .gap(px(8.))
+                            .children(subs.iter().map(|s| {
+                                let check = div()
+                                    .flex_none()
+                                    .mt(px(2.))
+                                    .size(px(15.))
+                                    .rounded(px(3.))
+                                    .flex()
+                                    .items_center()
+                                    .justify_center();
+                                let check = if s.done {
+                                    check.bg(rgb(SUCCESS)).child(icon("check", 11., PAGE))
+                                } else {
+                                    check.border_1().border_color(rgb(MUTED))
+                                };
+                                div().flex().items_start().gap(px(10.)).child(check).child(
+                                    div()
+                                        .flex_1()
+                                        .min_w_0()
+                                        .text_color(rgb(if s.done { MUTED } else { TEXT }))
+                                        .child(s.name.clone()),
+                                )
+                            })),
+                    )
+                })
+                .when(
+                    self.proposed.is_empty() && existing.is_some_and(|s| s.is_empty()),
+                    |d| {
+                        let text =
+                            "No sub-tasks yet. Press s and AI will draft a few for you to review.";
+                        let key = text.find(" s ").map_or(0..0, |i| i + 1..i + 2);
+                        d.child(div().text_size(px(13.)).text_color(rgb(MUTED)).child(
+                            StyledText::new(text).with_highlights([(
+                                key,
+                                HighlightStyle {
+                                    color: Some(rgb(TEXT).into()),
+                                    font_weight: Some(FontWeight::SEMIBOLD),
+                                    ..Default::default()
+                                },
+                            )]),
+                        ))
+                    },
+                )
+                .when(!self.proposed.is_empty(), |d| {
+                    d.child(self.proposal(kept, cx))
+                });
+        div()
+            .id("detail")
+            .flex_1()
+            .min_w_0()
+            .h_full()
+            .overflow_y_scroll()
+            .flex()
+            .flex_col()
+            .items_center()
+            .px(px(48.))
+            .child(inner)
     }
 
     fn proposal(&self, kept: usize, cx: &mut Context<Self>) -> Div {
