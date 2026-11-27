@@ -21,6 +21,12 @@ pub struct Task {
     pub logged_hours: f64,
 }
 
+#[derive(Clone, Debug)]
+pub struct SubTask {
+    pub name: String,
+    pub done: bool,
+}
+
 #[derive(Clone)]
 pub enum Auth {
     Password { login: String, password: String },
@@ -264,6 +270,26 @@ impl Odoo {
                 deadline: r["date_deadline"].as_str().map(Into::into),
                 priority_high: r["priority"] == "1",
                 logged_hours: r["effective_hours"].as_f64().unwrap_or(0.),
+            })
+            .collect())
+    }
+
+    pub fn subtasks(&self, parent: i64) -> Result<Vec<SubTask>> {
+        let query = |fields: Value| {
+            self.call(
+                "project.task",
+                "search_read",
+                json!({"domain": [["parent_id", "=", parent]], "fields": fields, "order": "sequence, id"}),
+            )
+        };
+        let rows = query(json!(["name", "state"])).or_else(|_| query(json!(["name"])))?;
+        Ok(rows
+            .as_array()
+            .into_iter()
+            .flatten()
+            .map(|r| SubTask {
+                name: r["name"].as_str().unwrap_or("").into(),
+                done: matches!(r["state"].as_str(), Some("1_done" | "1_canceled")),
             })
             .collect())
     }

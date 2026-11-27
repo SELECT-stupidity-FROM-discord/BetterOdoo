@@ -15,9 +15,9 @@ use gpui::{
     size, white,
 };
 use input::{InputEvent, TextInput};
-use odoo::{Login, Odoo, Task};
+use odoo::{Login, Odoo, SubTask, Task};
 use serde_json::json;
-use std::sync::Arc;
+use std::{collections::HashMap, sync::Arc};
 use theme::*;
 use ui::{icon, tag};
 
@@ -41,6 +41,7 @@ struct BetterOdoo {
     today: i64,
     connect: Option<Entity<ConnectView>>,
     rows_scroll: ScrollHandle,
+    subtasks: HashMap<i64, Option<Vec<SubTask>>>,
 }
 
 const KEYCHAIN: &str = "BetterOdoo";
@@ -64,6 +65,7 @@ impl BetterOdoo {
             today: date::today(),
             connect: None,
             rows_scroll: ScrollHandle::new(),
+            subtasks: HashMap::new(),
         };
         me.restore(window, cx);
         me
@@ -144,6 +146,7 @@ impl BetterOdoo {
                     Ok((version, t)) => {
                         this.version = version.into();
                         this.tasks = t;
+                        this.subtasks.clear();
                         this.today = date::today();
                         this.status = "Synced just now".into();
                     }
@@ -239,6 +242,29 @@ impl BetterOdoo {
                     }
                     Err(e) => this.status = format!("AI: {e}").into(),
                 }
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    fn ensure_subtasks(&mut self, parent: i64, cx: &mut Context<Self>) {
+        let Some(o) = self.odoo.clone() else { return };
+        if self.subtasks.contains_key(&parent) {
+            return;
+        }
+        self.subtasks.insert(parent, None);
+        cx.spawn(async move |this, cx| {
+            let r = cx
+                .background_executor()
+                .spawn(async move { o.subtasks(parent) })
+                .await;
+            this.update(cx, |this, cx| {
+                if let Err(e) = &r {
+                    this.status = e.to_string().into();
+                }
+                this.subtasks.insert(parent, Some(r.unwrap_or_default()));
                 cx.notify();
             })
             .ok();
@@ -785,6 +811,9 @@ impl Render for BetterOdoo {
                     .child(key("s".into(), "AI sub-tasks")),
             );
 
+        if let Some(id) = visible.get(self.selected).map(|t| t.id) {
+            self.ensure_subtasks(id, cx);
+        }
         let detail = self.detail(visible.get(self.selected), cx);
 
         div()
@@ -842,6 +871,11 @@ impl BetterOdoo {
         };
         let row = |l: Div, v: Div| div().flex().items_center().min_h(px(26.)).child(l).child(v);
         let kept = self.proposed.iter().filter(|p| p.keep).count();
+        let existing = self.subtasks.get(&t.id).cloned().flatten();
+        let existing = existing.as_ref();
+        let count = existing
+            .filter(|s| !s.is_empty())
+            .map(|s| (s.iter().filter(|x| x.done).count(), s.len()));
 
         panel
             .child(
@@ -889,7 +923,21 @@ impl BetterOdoo {
                     .flex()
                     .items_center()
                     .justify_between()
-                    .child(div().font_weight(FontWeight::SEMIBOLD).child("Sub-tasks"))
+                    .child(
+                        div()
+                            .flex()
+                            .items_baseline()
+                            .gap(px(8.))
+                            .child(div().font_weight(FontWeight::SEMIBOLD).child("Sub-tasks"))
+                            .when_some(count, |d, (done, total)| {
+                                d.child(
+                                    div()
+                                        .text_size(px(12.))
+                                        .text_color(rgb(MUTED))
+                                        .child(format!("{done}/{total} done")),
+                                )
+                            }),
+                    )
                     .child(
                         div()
                             .id("suggest")
@@ -916,20 +964,62 @@ impl BetterOdoo {
                             ),
                     ),
             )
-            .when(self.proposed.is_empty(), |d| {
-                let text = "No sub-tasks yet. Press s and AI will draft a few for you to review.";
-                let key = text.find(" s ").map_or(0..0, |i| i + 1..i + 2);
-                d.child(div().text_size(px(13.)).text_color(rgb(MUTED)).child(
-                    StyledText::new(text).with_highlights([(
-                        key,
-                        HighlightStyle {
-                            color: Some(rgb(TEXT).into()),
-                            font_weight: Some(FontWeight::SEMIBOLD),
-                            ..Default::default()
-                        },
-                    )]),
-                ))
+            .when(existing.is_none(), |d| {
+                d.child(
+                    div()
+                        .text_size(px(13.))
+                        .text_color(rgb(MUTED))
+                        .child("Loading sub-tasks…"),
+                )
             })
+            .when_some(existing.filter(|s| !s.is_empty()), |d, subs| {
+                d.child(
+                    div()
+                        .flex()
+                        .flex_col()
+                        .gap(px(8.))
+                        .children(subs.iter().map(|s| {
+                            let check = div()
+                                .flex_none()
+                                .mt(px(2.))
+                                .size(px(15.))
+                                .rounded(px(3.))
+                                .flex()
+                                .items_center()
+                                .justify_center();
+                            let check = if s.done {
+                                check.bg(rgb(SUCCESS)).child(icon("check", 11., PAGE))
+                            } else {
+                                check.border_1().border_color(rgb(MUTED))
+                            };
+                            div().flex().items_start().gap(px(10.)).child(check).child(
+                                div()
+                                    .flex_1()
+                                    .min_w_0()
+                                    .text_color(rgb(if s.done { MUTED } else { TEXT }))
+                                    .child(s.name.clone()),
+                            )
+                        })),
+                )
+            })
+            .when(
+                self.proposed.is_empty() && existing.is_some_and(|s| s.is_empty()),
+                |d| {
+                    let text =
+                        "No sub-tasks yet. Press s and AI will draft a few for you to review.";
+                    let key = text.find(" s ").map_or(0..0, |i| i + 1..i + 2);
+                    d.child(div().text_size(px(13.)).text_color(rgb(MUTED)).child(
+                        StyledText::new(text).with_highlights([(
+                            key,
+                            HighlightStyle {
+                                color: Some(rgb(TEXT).into()),
+                                font_weight: Some(FontWeight::SEMIBOLD),
+                                ..Default::default()
+                            },
+                        )]),
+                    ))
+                },
+            )
             .when(!self.proposed.is_empty(), |d| {
                 d.child(self.proposal(kept, cx))
             })
