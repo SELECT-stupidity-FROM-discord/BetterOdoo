@@ -10,8 +10,9 @@ mod ui;
 use connect::{ConnectView, Connected};
 use gpui::{
     App, Bounds, BoxShadow, ClickEvent, Context, Div, Entity, FocusHandle, Focusable, FontWeight,
-    HighlightStyle, KeyDownEvent, SharedString, Stateful, StyledText, TitlebarOptions, Window,
-    WindowBounds, WindowOptions, black, div, point, prelude::*, px, rgb, size, white,
+    HighlightStyle, KeyDownEvent, ScrollHandle, SharedString, Stateful, StyledText,
+    TitlebarOptions, Window, WindowBounds, WindowOptions, black, div, point, prelude::*, px, rgb,
+    size, white,
 };
 use input::{InputEvent, TextInput};
 use odoo::{Login, Odoo, Task};
@@ -39,6 +40,7 @@ struct BetterOdoo {
     proposed: Vec<Proposal>,
     today: i64,
     connect: Option<Entity<ConnectView>>,
+    rows_scroll: ScrollHandle,
 }
 
 const KEYCHAIN: &str = "BetterOdoo";
@@ -61,6 +63,7 @@ impl BetterOdoo {
             proposed: vec![],
             today: date::today(),
             connect: None,
+            rows_scroll: ScrollHandle::new(),
         };
         me.restore(window, cx);
         me
@@ -163,6 +166,7 @@ impl BetterOdoo {
         match ev {
             InputEvent::Changed => {
                 self.selected = 0;
+                self.rows_scroll.scroll_to_item(0);
                 self.proposed.clear();
             }
             InputEvent::Submit => window.focus(&self.focus, cx),
@@ -271,6 +275,7 @@ impl BetterOdoo {
     fn set_assignee(&mut self, who: Option<String>) {
         self.assignee = who;
         self.selected = 0;
+        self.rows_scroll.scroll_to_item(0);
         self.proposed.clear();
     }
 
@@ -303,6 +308,7 @@ impl BetterOdoo {
             }
             _ => return,
         }
+        self.rows_scroll.scroll_to_item(self.selected);
         cx.notify();
     }
 }
@@ -480,10 +486,18 @@ impl Render for BetterOdoo {
                     .text_color(rgb(MUTED))
                     .child("Projects"),
             );
+        let mut project_list = div()
+            .id("projects")
+            .flex()
+            .flex_col()
+            .flex_1()
+            .min_h_0()
+            .gap(px(1.))
+            .overflow_y_scroll();
         for (i, p) in projects.iter().enumerate() {
             let active = self.project.as_ref() == Some(p);
             let name = p.clone();
-            sidebar = sidebar.child(
+            project_list = project_list.child(
                 div()
                     .id(("project", i))
                     .flex()
@@ -507,13 +521,14 @@ impl Render for BetterOdoo {
                     .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
                         this.project = Some(name.clone());
                         this.selected = 0;
+                        this.rows_scroll.scroll_to_item(0);
                         this.proposed.clear();
                         cx.notify()
                     })),
             );
         }
         let synced = self.odoo.is_some() && self.status.as_ref() == "Synced just now";
-        sidebar = sidebar.child(div().flex_1()).child(
+        sidebar = sidebar.child(project_list).child(
             div()
                 .flex()
                 .items_center()
@@ -750,6 +765,7 @@ impl Render for BetterOdoo {
                     .child(
                         div()
                             .id("rows")
+                            .track_scroll(&self.rows_scroll)
                             .flex()
                             .flex_col()
                             .flex_1()
@@ -788,8 +804,10 @@ impl Render for BetterOdoo {
 }
 
 impl BetterOdoo {
-    fn detail(&self, task: Option<&Task>, cx: &mut Context<Self>) -> Div {
+    fn detail(&self, task: Option<&Task>, cx: &mut Context<Self>) -> Stateful<Div> {
         let panel = div()
+            .id("detail")
+            .overflow_y_scroll()
             .flex()
             .flex_col()
             .flex_none()
