@@ -1,10 +1,11 @@
 use crate::theme;
 use gpui::{
-    App, Bounds, ClipboardItem, Context, CursorStyle, ElementId, ElementInputHandler, Entity,
-    EntityInputHandler, EventEmitter, FocusHandle, Focusable, GlobalElementId, KeyBinding,
-    LayoutId, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, PaintQuad, Pixels, Point,
-    ShapedLine, SharedString, Style, TextRun, UTF16Selection, UnderlineStyle, Window, actions, div,
-    fill, point, prelude::*, px, relative, rgb, rgba, size,
+    App, AvailableSpace, Bounds, ClipboardItem, Context, CursorStyle, ElementId,
+    ElementInputHandler, Entity, EntityInputHandler, EventEmitter, FocusHandle, Focusable,
+    GlobalElementId, KeyBinding, LayoutId, MouseButton, MouseDownEvent, MouseMoveEvent,
+    MouseUpEvent, PaintQuad, Pixels, Point, SharedString, Size, Style, TextRun, UTF16Selection,
+    UnderlineStyle, Window, WrappedLine, actions, div, fill, point, prelude::*, px, relative, rgb,
+    rgba, size,
 };
 use std::ops::Range;
 use unicode_segmentation::UnicodeSegmentation;
@@ -25,6 +26,7 @@ actions!(
         Cut,
         Copy,
         Submit,
+        Confirm,
         Cancel,
         FocusNext,
         FocusPrev
@@ -74,6 +76,7 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new("home", Home, ctx),
         KeyBinding::new("end", End, ctx),
         KeyBinding::new("enter", Submit, ctx),
+        KeyBinding::new(sec!("enter"), Confirm, ctx),
         KeyBinding::new("escape", Cancel, ctx),
         KeyBinding::new("tab", FocusNext, ctx),
         KeyBinding::new("shift-tab", FocusPrev, ctx),
@@ -93,10 +96,12 @@ pub struct TextInput {
     selected_range: Range<usize>,
     selection_reversed: bool,
     marked_range: Option<Range<usize>>,
-    last_layout: Option<ShapedLine>,
+    last_lines: Vec<WrappedLine>,
+    last_line_height: Pixels,
     last_bounds: Option<Bounds<Pixels>>,
     is_selecting: bool,
     masked: bool,
+    multiline: bool,
 }
 
 impl EventEmitter<InputEvent> for TextInput {}
@@ -116,11 +121,18 @@ impl TextInput {
             selected_range: 0..0,
             selection_reversed: false,
             marked_range: None,
-            last_layout: None,
+            last_lines: Vec::new(),
+            last_line_height: px(0.),
             last_bounds: None,
             is_selecting: false,
             masked: false,
+            multiline: false,
         }
+    }
+
+    pub fn multiline(mut self) -> Self {
+        self.multiline = true;
+        self
     }
 
     pub fn masked(mut self) -> Self {
@@ -216,7 +228,15 @@ impl TextInput {
         self.replace_text_in_range(None, "", window, cx)
     }
 
-    fn submit(&mut self, _: &Submit, _: &mut Window, cx: &mut Context<Self>) {
+    fn submit(&mut self, _: &Submit, window: &mut Window, cx: &mut Context<Self>) {
+        if self.multiline {
+            self.replace_text_in_range(None, "\n", window, cx);
+        } else {
+            cx.emit(InputEvent::Submit);
+        }
+    }
+
+    fn confirm(&mut self, _: &Confirm, _: &mut Window, cx: &mut Context<Self>) {
         cx.emit(InputEvent::Submit);
     }
 
@@ -254,7 +274,12 @@ impl TextInput {
 
     fn paste(&mut self, _: &Paste, window: &mut Window, cx: &mut Context<Self>) {
         if let Some(text) = cx.read_from_clipboard().and_then(|item| item.text()) {
-            self.replace_text_in_range(None, &text.replace('\n', " "), window, cx);
+            let text = if self.multiline {
+                text
+            } else {
+                text.replace('\n', " ")
+            };
+            self.replace_text_in_range(None, &text, window, cx);
         }
     }
 
@@ -289,17 +314,18 @@ impl TextInput {
     }
 
     fn index_for_mouse_position(&self, position: Point<Pixels>) -> usize {
-        let (Some(bounds), Some(line)) = (self.last_bounds.as_ref(), self.last_layout.as_ref())
-        else {
+        let Some(bounds) = self.last_bounds else {
             return 0;
         };
-        if self.content.is_empty() || position.y < bounds.top() {
+        if self.content.is_empty() || self.last_lines.is_empty() {
             return 0;
         }
-        if position.y > bounds.bottom() {
-            return self.content.len();
-        }
-        self.content_offset(line.closest_index_for_x(position.x - bounds.left()))
+        let local = position - bounds.origin;
+        self.content_offset(wrapped_index(
+            &self.last_lines,
+            local,
+            self.last_line_height,
+        ))
     }
 
     fn select_to(&mut self, offset: usize, window: &Window, cx: &mut Context<Self>) {
@@ -478,20 +504,16 @@ impl EntityInputHandler for TextInput {
         _: &mut Window,
         _: &mut Context<Self>,
     ) -> Option<Bounds<Pixels>> {
-        let layout = self.last_layout.as_ref()?;
-        if layout.text != self.display_text() {
+        if self.last_lines.is_empty() {
             return None;
         }
         let range = self.range_from_utf16(&range_utf16);
+        let lh = self.last_line_height;
+        let start = wrapped_position(&self.last_lines, self.display_offset(range.start), lh);
+        let end = wrapped_position(&self.last_lines, self.display_offset(range.end), lh);
         Some(Bounds::from_corners(
-            point(
-                bounds.left() + layout.x_for_index(self.display_offset(range.start)),
-                bounds.top(),
-            ),
-            point(
-                bounds.left() + layout.x_for_index(self.display_offset(range.end)),
-                bounds.bottom(),
-            ),
+            bounds.origin + start,
+            bounds.origin + point(end.x.max(start.x), start.y + lh),
         ))
     }
 
@@ -514,13 +536,45 @@ impl EntityInputHandler for TextInput {
         _: &mut Context<Self>,
     ) -> Option<usize> {
         let local = self.last_bounds?.localize(&point)?;
-        let layout = self.last_layout.as_ref()?;
-        if layout.text != self.display_text() {
+        if self.last_lines.is_empty() {
             return None;
         }
-        let index = self.content_offset(layout.closest_index_for_x(local.x));
-        Some(self.offset_to_utf16(index))
+        let index = wrapped_index(&self.last_lines, local, self.last_line_height);
+        Some(self.offset_to_utf16(self.content_offset(index)))
     }
+}
+
+fn wrapped_position(lines: &[WrappedLine], index: usize, line_height: Pixels) -> Point<Pixels> {
+    let (mut start, mut y) = (0, px(0.));
+    for line in lines {
+        let end = start + line.len();
+        if index <= end {
+            let p = line
+                .position_for_index(index - start, line_height)
+                .unwrap_or_default();
+            return point(p.x, y + p.y);
+        }
+        y += line.size(line_height).height;
+        start = end + 1;
+    }
+    point(px(0.), y)
+}
+
+fn wrapped_index(lines: &[WrappedLine], position: Point<Pixels>, line_height: Pixels) -> usize {
+    let (mut start, mut y) = (0, px(0.));
+    for (i, line) in lines.iter().enumerate() {
+        let height = line.size(line_height).height;
+        if position.y < y + height || i + 1 == lines.len() {
+            let local = point(position.x, (position.y - y).max(px(0.)));
+            let ix = match line.closest_index_for_position(local, line_height) {
+                Ok(ix) | Err(ix) => ix,
+            };
+            return start + ix.min(line.len());
+        }
+        y += height;
+        start += line.len() + 1;
+    }
+    0
 }
 
 struct TextElement {
@@ -528,45 +582,14 @@ struct TextElement {
 }
 
 struct PrepaintState {
-    line: Option<ShapedLine>,
+    lines: Vec<WrappedLine>,
+    line_height: Pixels,
     cursor: Option<PaintQuad>,
-    selection: Option<PaintQuad>,
+    selection: Vec<PaintQuad>,
 }
 
-impl Element for TextElement {
-    type RequestLayoutState = ();
-    type PrepaintState = PrepaintState;
-
-    fn id(&self) -> Option<ElementId> {
-        None
-    }
-
-    fn source_location(&self) -> Option<&'static core::panic::Location<'static>> {
-        None
-    }
-
-    fn request_layout(
-        &mut self,
-        _: Option<&GlobalElementId>,
-        _: Option<&gpui::InspectorElementId>,
-        window: &mut Window,
-        cx: &mut App,
-    ) -> (LayoutId, ()) {
-        let mut style = Style::default();
-        style.size.width = relative(1.).into();
-        style.size.height = window.line_height().into();
-        (window.request_layout(style, [], cx), ())
-    }
-
-    fn prepaint(
-        &mut self,
-        _: Option<&GlobalElementId>,
-        _: Option<&gpui::InspectorElementId>,
-        bounds: Bounds<Pixels>,
-        _: &mut (),
-        window: &mut Window,
-        cx: &mut App,
-    ) -> PrepaintState {
+impl TextElement {
+    fn shaping(&self, window: &Window, cx: &App) -> (SharedString, Vec<TextRun>, Pixels) {
         let input = self.input.read(cx);
         let style = window.text_style();
         let (text, color) = if input.content.is_empty() {
@@ -586,7 +609,7 @@ impl Element for TextElement {
             .marked_range
             .as_ref()
             .map(|m| input.display_offset(m.start)..input.display_offset(m.end));
-        let runs = match marked.as_ref() {
+        let runs = match marked {
             Some(m) => [
                 TextRun {
                     len: m.start,
@@ -612,32 +635,120 @@ impl Element for TextElement {
             None => vec![run],
         };
         let font_size = style.font_size.to_pixels(window.rem_size());
-        let line = window
+        (text, runs, font_size)
+    }
+}
+
+impl Element for TextElement {
+    type RequestLayoutState = ();
+    type PrepaintState = PrepaintState;
+
+    fn id(&self) -> Option<ElementId> {
+        None
+    }
+
+    fn source_location(&self) -> Option<&'static core::panic::Location<'static>> {
+        None
+    }
+
+    fn request_layout(
+        &mut self,
+        _: Option<&GlobalElementId>,
+        _: Option<&gpui::InspectorElementId>,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> (LayoutId, ()) {
+        let mut style = Style::default();
+        style.size.width = relative(1.).into();
+        let line_height = window.line_height();
+        if !self.input.read(cx).multiline {
+            style.size.height = line_height.into();
+            return (window.request_layout(style, [], cx), ());
+        }
+        let (text, runs, font_size) = self.shaping(window, cx);
+        let id = window.request_measured_layout(style, move |known, available, window, _| {
+            let width = known.width.or(match available.width {
+                AvailableSpace::Definite(w) => Some(w),
+                _ => None,
+            });
+            let height = window
+                .text_system()
+                .shape_text(text.clone(), font_size, &runs, width, None)
+                .map(|lines| {
+                    lines
+                        .iter()
+                        .fold(px(0.), |h, l| h + l.size(line_height).height)
+                })
+                .unwrap_or(line_height);
+            Size {
+                width: width.unwrap_or_default(),
+                height: height.max(line_height),
+            }
+        });
+        (id, ())
+    }
+
+    fn prepaint(
+        &mut self,
+        _: Option<&GlobalElementId>,
+        _: Option<&gpui::InspectorElementId>,
+        bounds: Bounds<Pixels>,
+        _: &mut (),
+        window: &mut Window,
+        cx: &mut App,
+    ) -> PrepaintState {
+        let (text, runs, font_size) = self.shaping(window, cx);
+        let input = self.input.read(cx);
+        let line_height = window.line_height();
+        let wrap = input.multiline.then_some(bounds.size.width);
+        let lines: Vec<WrappedLine> = window
             .text_system()
-            .shape_line(text, font_size, &runs, None);
-        let sel = input.selected_range.clone();
-        let (selection, cursor) = if sel.is_empty() {
-            let x = line.x_for_index(input.display_offset(input.cursor_offset()));
-            let caret = Bounds::new(
-                point(bounds.left() + x, bounds.top()),
-                size(px(1.5), bounds.size.height),
-            );
-            (None, Some(fill(caret, rgb(theme::TEXT))))
-        } else {
-            let area = Bounds::from_corners(
-                point(
-                    bounds.left() + line.x_for_index(input.display_offset(sel.start)),
-                    bounds.top(),
-                ),
-                point(
-                    bounds.left() + line.x_for_index(input.display_offset(sel.end)),
-                    bounds.bottom(),
-                ),
-            );
-            (Some(fill(area, rgba(theme::SELECTION))), None)
+            .shape_text(text, font_size, &runs, wrap, None)
+            .map(|l| l.into_iter().collect())
+            .unwrap_or_default();
+        let at = |offset: usize| {
+            bounds.origin + wrapped_position(&lines, input.display_offset(offset), line_height)
         };
+        let sel = input.selected_range.clone();
+        let mut selection = Vec::new();
+        let mut cursor = None;
+        if sel.is_empty() {
+            let p = at(input.cursor_offset());
+            cursor = Some(fill(
+                Bounds::new(p, size(px(1.5), line_height)),
+                rgb(theme::TEXT),
+            ));
+        } else {
+            let (a, b) = (at(sel.start), at(sel.end));
+            let color = rgba(theme::SELECTION);
+            if a.y == b.y {
+                selection.push(fill(
+                    Bounds::from_corners(a, point(b.x, b.y + line_height)),
+                    color,
+                ));
+            } else {
+                selection.push(fill(
+                    Bounds::from_corners(a, point(bounds.right(), a.y + line_height)),
+                    color,
+                ));
+                if b.y > a.y + line_height {
+                    selection.push(fill(
+                        Bounds::from_corners(
+                            point(bounds.left(), a.y + line_height),
+                            point(bounds.right(), b.y),
+                        ),
+                        color,
+                    ));
+                }
+                selection.push(fill(
+                    Bounds::from_corners(point(bounds.left(), b.y), point(b.x, b.y + line_height)),
+                    color,
+                ));
+            }
+        }
         PrepaintState {
-            line: Some(line),
+            lines,
+            line_height,
             cursor,
             selection,
         }
@@ -659,26 +770,32 @@ impl Element for TextElement {
             ElementInputHandler::new(bounds, self.input.clone()),
             cx,
         );
-        if let Some(selection) = prepaint.selection.take() {
-            window.paint_quad(selection)
+        for quad in prepaint.selection.drain(..) {
+            window.paint_quad(quad);
         }
-        let line = prepaint.line.take().unwrap();
-        line.paint(
-            bounds.origin,
-            window.line_height(),
-            gpui::TextAlign::Left,
-            None,
-            window,
-            cx,
-        )
-        .unwrap();
+        let line_height = prepaint.line_height;
+        let mut y = px(0.);
+        for line in &prepaint.lines {
+            line.paint(
+                bounds.origin + point(px(0.), y),
+                line_height,
+                gpui::TextAlign::Left,
+                None,
+                window,
+                cx,
+            )
+            .ok();
+            y += line.size(line_height).height;
+        }
         if focus.is_focused(window)
             && let Some(cursor) = prepaint.cursor.take()
         {
             window.paint_quad(cursor);
         }
+        let lines = std::mem::take(&mut prepaint.lines);
         self.input.update(cx, |input, _| {
-            input.last_layout = Some(line);
+            input.last_lines = lines;
+            input.last_line_height = line_height;
             input.last_bounds = Some(bounds);
         });
     }
@@ -705,6 +822,7 @@ impl Render for TextInput {
             .on_action(cx.listener(Self::cut))
             .on_action(cx.listener(Self::copy))
             .on_action(cx.listener(Self::submit))
+            .on_action(cx.listener(Self::confirm))
             .on_action(cx.listener(Self::cancel))
             .on_action(cx.listener(Self::focus_next))
             .on_action(cx.listener(Self::focus_prev))
