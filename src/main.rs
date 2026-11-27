@@ -4,6 +4,7 @@ mod connect;
 mod date;
 mod input;
 mod odoo;
+mod ollama;
 mod settings;
 mod theme;
 mod ui;
