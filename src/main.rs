@@ -4,17 +4,19 @@ mod date;
 mod input;
 mod odoo;
 mod theme;
+mod ui;
 
 use gpui::{
     App, Bounds, BoxShadow, ClickEvent, Context, Div, Entity, FocusHandle, Focusable, FontWeight,
-    HighlightStyle, KeyDownEvent, SharedString, Stateful, StyledText, Svg, TitlebarOptions, Window,
-    WindowBounds, WindowOptions, black, div, point, prelude::*, px, rgb, size, svg, white,
+    HighlightStyle, KeyDownEvent, SharedString, Stateful, StyledText, TitlebarOptions, Window,
+    WindowBounds, WindowOptions, black, div, point, prelude::*, px, rgb, size, white,
 };
 use input::{InputEvent, TextInput};
 use odoo::{Odoo, Task};
 use serde_json::json;
 use std::sync::Arc;
 use theme::*;
+use ui::{icon, tag};
 
 struct Proposal {
     name: String,
@@ -260,27 +262,6 @@ impl BetterOdoo {
         }
         cx.notify();
     }
-}
-
-fn icon(name: &str, size: f32, color: u32) -> Svg {
-    svg()
-        .path(format!("icons/{name}.svg"))
-        .size(px(size))
-        .flex_none()
-        .text_color(rgb(color))
-}
-
-fn tag(text: impl Into<SharedString>, tone: Tone, text_size: f32) -> Div {
-    div()
-        .flex_none()
-        .px(px(8.))
-        .py(px(2.))
-        .rounded(px(4.))
-        .text_size(px(text_size))
-        .font_weight(FontWeight::MEDIUM)
-        .bg(rgb(tone.bg))
-        .text_color(rgb(tone.fg))
-        .child(text.into())
 }
 
 fn stage_tone(stage: &str) -> Tone {
