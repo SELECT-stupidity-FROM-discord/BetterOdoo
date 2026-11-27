@@ -246,10 +246,10 @@ impl Odoo {
             }
             return Ok(req.send_json(&kw)?.body_mut().read_json()?);
         }
-        let args = kw
-            .as_object_mut()
-            .and_then(|o| o.remove("ids"))
-            .map_or(json!([]), |ids| json!([ids]));
+        let mut take = |key: &str| kw.as_object_mut().and_then(|o| o.remove(key));
+        let args = take("ids")
+            .or_else(|| take("vals_list"))
+            .map_or(json!([]), |first| json!([first]));
         let r = self.rpc(
             &format!("/web/dataset/call_kw/{model}/{method}"),
             json!({"model": model, "method": method, "args": args, "kwargs": kw}),
