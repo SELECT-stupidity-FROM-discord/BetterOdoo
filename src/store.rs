@@ -150,7 +150,8 @@ impl Store {
             let r = cx
                 .background_executor()
                 .spawn(async move {
-                    let mut description = html::parse(&o.description(id)?, o.base_url());
+                    let raw = o.description(id)?;
+                    let mut description = html::parse(&raw, o.base_url());
                     for a in o.attachments(id).unwrap_or_default() {
                         let Block::Attachment { url, .. } = &a else { continue };
                         let known = |b: &Block| matches!(b, Block::Attachment { url: u, .. } if u.split('?').next() == url.split('?').next());

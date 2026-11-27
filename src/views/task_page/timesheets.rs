@@ -36,7 +36,7 @@ impl TimesheetTab {
         let (name, hours, day) = (
             input("What did you work on?", cx),
             input("1h 30m", cx),
-            input("Today (YYYY-MM-DD)", cx),
+            input("Today", cx),
         );
         for i in [&name, &hours, &day] {
             cx.subscribe_in(i, window, Self::on_input).detach();
@@ -132,7 +132,13 @@ fn pill(icon_name: &'static str, width: f32, input: &Entity<TextInput>) -> impl 
         .border_1()
         .border_color(rgb(BORDER))
         .child(icon(icon_name, 14., MUTED))
-        .child(div().flex_1().child(input.clone()))
+        .child(
+            div()
+                .flex_1()
+                .min_w_0()
+                .overflow_hidden()
+                .child(input.clone()),
+        )
 }
 
 impl TimesheetTab {

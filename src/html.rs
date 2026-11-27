@@ -101,6 +101,22 @@ impl Parser {
             .split(|c: char| c.is_whitespace() || c == '/')
             .next()
             .unwrap_or("");
+        if !closing && let Some(props) = attr(tag, "data-embedded-props") {
+            let url = props
+                .split("\"url\":\"")
+                .nth(1)
+                .and_then(|r| r.split('"').next())
+                .map(|u| u.replace("\\/", "/"));
+            if let Some(url) = url {
+                let host = url.split('/').nth(2).unwrap_or("link");
+                let label = if url.contains("google.com/spreadsheets") {
+                    "Google Sheet".to_string()
+                } else {
+                    format!("Embedded content · {host}")
+                };
+                self.attachment(label, url);
+            }
+        }
         match (name, closing) {
             ("b" | "strong", false) => self.bold += 1,
             ("b" | "strong", true) => self.bold = self.bold.saturating_sub(1),
@@ -213,6 +229,18 @@ mod tests {
                 Block::Item("1.".into(), vec![run("a", false)]),
                 Block::Item("2.".into(), vec![run("b", false)]),
             ]
+        );
+    }
+
+    #[test]
+    fn embedded_sheets_become_links() {
+        let html = "<div data-embedded=\"whiteboard\" data-embedded-props=\"{&quot;url&quot;:&quot;https://docs.google.com/spreadsheets/d/1/edit?usp=sharing&quot;,&quot;type&quot;:&quot;google&quot;}\"></div><p>x</p>";
+        assert_eq!(
+            parse(html, "https://x.io")[0],
+            Block::Attachment {
+                label: "Google Sheet".into(),
+                url: "https://docs.google.com/spreadsheets/d/1/edit?usp=sharing".into()
+            }
         );
     }
 
