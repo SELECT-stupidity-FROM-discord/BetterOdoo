@@ -138,8 +138,14 @@ impl Parser {
             }
             ("li", true) => self.flush(),
             ("img", false) => {
+                if let Some(src) = attr(tag, "src").filter(|s| !s.starts_with("data:")) {
+                    self.attachment("Image attachment".into(), absolute(base, &src));
+                }
+            }
+            ("iframe", false) => {
                 if let Some(src) = attr(tag, "src") {
-                    self.attachment("Attachment".into(), absolute(base, &src));
+                    let host = src.split('/').nth(2).unwrap_or("link");
+                    self.attachment(format!("Embedded content · {host}"), absolute(base, &src));
                 }
             }
             ("a", false) => {
@@ -218,7 +224,7 @@ mod tests {
             vec![
                 Block::Text(vec![run("See", false)]),
                 Block::Attachment {
-                    label: "Attachment".into(),
+                    label: "Image attachment".into(),
                     url: "https://x.io/web/image/7?access_token=t".into()
                 },
                 Block::Attachment {

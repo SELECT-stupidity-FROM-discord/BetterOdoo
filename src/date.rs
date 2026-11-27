@@ -98,3 +98,45 @@ mod tests {
         assert!(is_valid("2026-11-28") && !is_valid("2026-02-30") && !is_valid("tomorrow"));
     }
 }
+
+fn utc_offset_minutes() -> i64 {
+    static OFFSET: std::sync::OnceLock<i64> = std::sync::OnceLock::new();
+    *OFFSET.get_or_init(|| {
+        // ponytail: shells out to `date`; Windows falls back to UTC
+        let out = std::process::Command::new("date").arg("+%z").output().ok();
+        let z = out.map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string());
+        z.filter(|z| z.len() == 5)
+            .and_then(|z| {
+                let sign = if z.starts_with('-') { -1 } else { 1 };
+                Some(
+                    sign * (z.get(1..3)?.parse::<i64>().ok()? * 60
+                        + z.get(3..5)?.parse::<i64>().ok()?),
+                )
+            })
+            .unwrap_or(0)
+    })
+}
+
+// Odoo UTC "YYYY-MM-DD HH:MM:SS" to (local day label, local time label).
+pub fn stamp(utc: &str) -> (String, String) {
+    let Some((y, m, d)) = parse(utc) else {
+        return (String::new(), String::new());
+    };
+    let clock = |i: usize| {
+        utc.get(i..i + 2)
+            .and_then(|p| p.parse::<i64>().ok())
+            .unwrap_or(0)
+    };
+    let total = clock(11) * 60 + clock(14) + utc_offset_minutes();
+    let days = days_from_civil(y, m, d) + total.div_euclid(1440);
+    let minutes = total.rem_euclid(1440);
+    let (y, m, d) = parse(&iso(days)).unwrap_or((y, m, d));
+    let hour = minutes / 60;
+    let time = format!(
+        "{}:{:02} {}",
+        if hour % 12 == 0 { 12 } else { hour % 12 },
+        minutes % 60,
+        if hour < 12 { "am" } else { "pm" }
+    );
+    (format!("{d} {} {y}", MONTHS[(m - 1) as usize]), time)
+}

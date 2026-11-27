@@ -8,7 +8,7 @@ use std::{collections::HashMap, sync::Arc};
 pub struct Detail {
     pub description: Vec<Block>,
     pub timesheets: Vec<Timesheet>,
-    pub messages: Vec<Message>,
+    pub messages: Result<Vec<Message>, String>,
 }
 
 pub enum Load<T> {
@@ -150,10 +150,18 @@ impl Store {
             let r = cx
                 .background_executor()
                 .spawn(async move {
+                    let mut description = html::parse(&o.description(id)?, o.base_url());
+                    for a in o.attachments(id).unwrap_or_default() {
+                        let Block::Attachment { url, .. } = &a else { continue };
+                        let known = |b: &Block| matches!(b, Block::Attachment { url: u, .. } if u.split('?').next() == url.split('?').next());
+                        if !description.iter().any(known) {
+                            description.push(a);
+                        }
+                    }
                     anyhow::Ok(Detail {
-                        description: html::parse(&o.description(id)?, o.base_url()),
+                        description,
                         timesheets: o.timesheets(id).unwrap_or_default(),
-                        messages: o.messages(id).unwrap_or_default(),
+                        messages: o.messages(id).map_err(|e| e.to_string()),
                     })
                 })
                 .await;

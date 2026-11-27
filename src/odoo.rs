@@ -1,3 +1,4 @@
+use crate::html::{self, Block};
 use anyhow::{Result, anyhow};
 use serde_json::{Value, json};
 
@@ -53,7 +54,7 @@ pub struct Change {
 pub struct Message {
     pub author: String,
     pub date: String,
-    pub body: String,
+    pub body: Vec<Block>,
     pub changes: Vec<Change>,
 }
 
@@ -469,66 +470,72 @@ impl Odoo {
             "search_read",
             json!({
                 "domain": [["model", "=", "project.task"], ["res_id", "=", task]],
-                "fields": ["author_id", "date", "body", "tracking_value_ids"],
+                "fields": ["author_id", "date", "body"],
                 "order": "id desc",
             }),
         )?;
-        let ids: Vec<i64> = rows
-            .as_array()
-            .into_iter()
-            .flatten()
-            .flat_map(|r| {
-                r["tracking_value_ids"]
-                    .as_array()
-                    .cloned()
-                    .unwrap_or_default()
-            })
-            .filter_map(|v| v.as_i64())
-            .collect();
-        let tracking = if ids.is_empty() {
-            json!([])
-        } else {
-            self.call(
+        let rows = rows.as_array().cloned().unwrap_or_default();
+        let ids: Vec<i64> = rows.iter().filter_map(|r| r["id"].as_i64()).collect();
+        let tracking = self
+            .call(
                 "mail.tracking.value",
-                "read",
-                json!({"ids": ids, "fields": [
-                    "field_id", "old_value_char", "new_value_char", "old_value_datetime",
-                    "new_value_datetime", "old_value_integer", "new_value_integer",
-                    "old_value_float", "new_value_float",
-                ]}),
+                "search_read",
+                json!({
+                    "domain": [["mail_message_id", "in", ids]],
+                    "fields": [
+                        "mail_message_id", "field_id", "old_value_char", "new_value_char",
+                        "old_value_datetime", "new_value_datetime", "old_value_integer",
+                        "new_value_integer", "old_value_float", "new_value_float",
+                    ],
+                }),
             )
-            .unwrap_or(json!([]))
+            .unwrap_or(json!([]));
+        let tracking = tracking.as_array().cloned().unwrap_or_default();
+        let pick = |t: &Value, side: &str| {
+            ["char", "datetime", "integer", "float"]
+                .iter()
+                .map(|k| &t[format!("{side}_value_{k}")])
+                .find(|v| !v.is_null() && **v != json!(false) && **v != json!(""))
+                .map_or("None".into(), |v| {
+                    v.as_str().map_or(v.to_string(), str::to_string)
+                })
         };
-        let change = |t: &Value| {
-            let pick = |side: &str| {
-                ["char", "datetime", "integer", "float"]
+        Ok(rows
+            .iter()
+            .map(|r| Message {
+                author: m2o(&r["author_id"]),
+                date: r["date"].as_str().unwrap_or("").into(),
+                body: html::parse(r["body"].as_str().unwrap_or(""), &self.url),
+                changes: tracking
                     .iter()
-                    .map(|k| &t[format!("{side}_value_{k}")])
-                    .find(|v| !v.is_null() && **v != json!(false) && **v != json!(""))
-                    .map(|v| v.as_str().map_or(v.to_string(), str::to_string))
-                    .unwrap_or("None".into())
-            };
-            Change {
-                field: m2o(&t["field_id"]),
-                old: pick("old"),
-                new: pick("new"),
-            }
-        };
+                    .filter(|t| t["mail_message_id"][0] == r["id"])
+                    .map(|t| Change {
+                        field: m2o(&t["field_id"]),
+                        old: pick(t, "old"),
+                        new: pick(t, "new"),
+                    })
+                    .collect(),
+            })
+            .filter(|m| !m.body.is_empty() || !m.changes.is_empty())
+            .collect())
+    }
+
+    pub fn attachments(&self, task: i64) -> Result<Vec<Block>> {
+        let rows = self.call(
+            "ir.attachment",
+            "search_read",
+            json!({
+                "domain": [["res_model", "=", "project.task"], ["res_id", "=", task]],
+                "fields": ["name"],
+            }),
+        )?;
         Ok(rows
             .as_array()
             .into_iter()
             .flatten()
-            .map(|r| Message {
-                author: m2o(&r["author_id"]),
-                date: r["date"].as_str().unwrap_or("").into(),
-                body: r["body"].as_str().unwrap_or("").into(),
-                changes: r["tracking_value_ids"]
-                    .as_array()
-                    .into_iter()
-                    .flatten()
-                    .filter_map(|id| tracking.as_array()?.iter().find(|t| t["id"] == *id))
-                    .map(change)
-                    .collect(),
+            .map(|r| Block::Attachment {
+                label: r["name"].as_str().unwrap_or("Attachment").into(),
+                url: format!("{}/web/content/{}?download=true", self.url, r["id"]),
             })
             .collect())
     }
