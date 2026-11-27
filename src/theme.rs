@@ -44,3 +44,6 @@ pub const PURPLE: Tone = Tone {
 pub const AI_BORDER: u32 = 0xe6dcef;
 
 pub const PEOPLE: [Tone; 4] = [BLUE, ORANGE, GREEN, PURPLE];
+
+pub const ACTIVE_STEP: u32 = 0xdcebf9;
+pub const ACTIVE_STEP_TEXT: u32 = 0x1a5a9e;

@@ -211,7 +211,8 @@ impl TaskPage {
     }
 
     fn status(&self, t: &Task, cx: &mut Context<Self>) -> impl IntoElement {
-        let stages = self.store.read(cx).stages_of(t.project_id).to_vec();
+        let store = self.store.read(cx);
+        let (stages, today) = (store.stages_of(t.project_id).to_vec(), store.today);
         if stages.is_empty() {
             return div()
                 .flex()
@@ -224,9 +225,15 @@ impl TaskPage {
             .fold(Segmented::new(), |bar, s| {
                 let on = t.stage_id == Some(s.id);
                 let name = s.name.clone();
+                let note = on
+                    .then(|| t.stage_since.as_deref())
+                    .flatten()
+                    .and_then(|d| date::days_since(d, today))
+                    .map(|n| format!("{n}d"));
                 bar.item(
                     name,
                     on,
+                    note,
                     cx.listener(move |this, _: &ClickEvent, _, cx| {
                         let stage = s.clone();
                         this.store.update(cx, |st, cx| st.set_stage(id, stage, cx))

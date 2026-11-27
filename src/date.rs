@@ -140,3 +140,8 @@ pub fn stamp(utc: &str) -> (String, String) {
     );
     (format!("{d} {} {y}", MONTHS[(m - 1) as usize]), time)
 }
+
+pub fn days_since(stamp: &str, today: i64) -> Option<i64> {
+    let (y, m, d) = parse(stamp)?;
+    Some((today - days_from_civil(y, m, d)).max(0))
+}

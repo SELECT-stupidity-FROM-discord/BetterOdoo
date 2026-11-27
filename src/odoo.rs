@@ -26,6 +26,7 @@ pub struct Task {
     pub priority_high: bool,
     pub logged_hours: f64,
     pub done: bool,
+    pub stage_since: Option<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -279,7 +280,9 @@ impl Odoo {
                 json!({"domain": domain, "fields": fields, "order": "priority desc, date_deadline asc"}),
             )
         };
-        let rows = query(&["state"]).or_else(|_| query(&[]))?;
+        let rows = query(&["state", "date_last_stage_update"])
+            .or_else(|_| query(&["state"]))
+            .or_else(|_| query(&[]))?;
         let stage_ids: Vec<i64> = rows
             .as_array()
             .into_iter()
@@ -351,6 +354,7 @@ impl Odoo {
                     .map(name_of)
                     .collect(),
                 deadline: r["date_deadline"].as_str().map(Into::into),
+                stage_since: r["date_last_stage_update"].as_str().map(Into::into),
                 priority_high: r["priority"] == "1",
                 logged_hours: r["effective_hours"].as_f64().unwrap_or(0.),
                 done: matches!(r["state"].as_str(), Some("1_done" | "1_canceled"))

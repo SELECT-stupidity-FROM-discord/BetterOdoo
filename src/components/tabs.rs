@@ -1,7 +1,7 @@
 use crate::theme::*;
 use gpui::{
-    App, ClickEvent, FontWeight, IntoElement, RenderOnce, SharedString, Window, div, prelude::*,
-    px, rgb, white,
+    App, ClickEvent, FontWeight, IntoElement, PathBuilder, RenderOnce, SharedString, Window,
+    canvas, div, point, prelude::*, px, rgb,
 };
 
 struct Item {
@@ -76,9 +76,16 @@ impl RenderOnce for TabBar {
     }
 }
 
+struct Step {
+    label: SharedString,
+    active: bool,
+    note: Option<String>,
+    on_click: super::OnClick,
+}
+
 #[derive(IntoElement, Default)]
 pub struct Segmented {
-    items: Vec<Item>,
+    items: Vec<Step>,
 }
 
 impl Segmented {
@@ -90,54 +97,88 @@ impl Segmented {
         mut self,
         label: impl Into<SharedString>,
         active: bool,
+        note: Option<String>,
         on_click: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
     ) -> Self {
-        self.items.push(Item {
+        self.items.push(Step {
             label: label.into(),
             active,
+            note,
             on_click: Box::new(on_click),
         });
         self
     }
 }
 
+const ARROW: f32 = 11.;
+
+fn arrow(color: u32) -> impl IntoElement {
+    canvas(
+        |_, _, _| (),
+        move |bounds, _, window, _| {
+            let mut path = PathBuilder::fill();
+            path.move_to(bounds.origin);
+            path.line_to(point(
+                bounds.origin.x + bounds.size.width,
+                bounds.origin.y + bounds.size.height / 2.,
+            ));
+            path.line_to(point(bounds.origin.x, bounds.origin.y + bounds.size.height));
+            if let Ok(path) = path.build() {
+                window.paint_path(path, rgb(color));
+            }
+        },
+    )
+    .flex_none()
+    .w(px(ARROW))
+}
+
 impl RenderOnce for Segmented {
     fn render(self, _: &mut Window, _: &mut App) -> impl IntoElement {
-        let current = self.items.iter().position(|t| t.active);
         div()
             .flex()
             .flex_wrap()
-            .gap(px(6.))
+            .items_stretch()
+            .p(px(3.))
+            .rounded(px(9.))
+            .border_1()
+            .border_color(rgb(BORDER))
+            .bg(rgb(PAGE))
             .children(self.items.into_iter().enumerate().map(|(i, t)| {
-                let reached = current.is_some_and(|c| i < c);
-                div()
+                let step = div()
                     .id(("segment", i))
+                    .flex()
+                    .items_center()
+                    .gap(px(8.))
                     .px(px(14.))
                     .py(px(7.))
-                    .rounded(px(6.))
-                    .border_1()
                     .cursor_pointer()
                     .text_size(px(13.))
-                    .font_weight(FontWeight::MEDIUM)
                     .when(t.active, |d| {
-                        d.bg(rgb(ACCENT))
-                            .border_color(rgb(ACCENT))
-                            .text_color(white())
+                        d.rounded_l(px(7.))
+                            .bg(rgb(ACTIVE_STEP))
+                            .text_color(rgb(ACTIVE_STEP_TEXT))
+                            .font_weight(FontWeight::SEMIBOLD)
                     })
-                    .when(reached, |d| {
-                        d.bg(rgb(BLUE.bg))
-                            .border_color(rgb(BLUE.bg))
-                            .text_color(rgb(BLUE.fg))
-                            .hover(|s| s.bg(rgb(0xd6e6f6)))
-                    })
-                    .when(!t.active && !reached, |d| {
-                        d.bg(rgb(PAGE))
-                            .border_color(rgb(BORDER))
+                    .when(!t.active, |d| {
+                        d.rounded(px(7.))
                             .text_color(rgb(TEXT_SOFT))
+                            .font_weight(FontWeight::MEDIUM)
                             .hover(|s| s.bg(rgb(HOVER)))
                     })
                     .child(t.label)
-                    .on_click(t.on_click)
+                    .children(t.note.map(|n| {
+                        div()
+                            .text_size(px(12.))
+                            .font_weight(FontWeight::NORMAL)
+                            .text_color(rgb(MUTED))
+                            .child(n)
+                    }))
+                    .on_click(t.on_click);
+                div()
+                    .flex()
+                    .items_stretch()
+                    .child(step)
+                    .when(t.active, |d| d.child(arrow(ACTIVE_STEP)))
             }))
     }
 }
