@@ -23,6 +23,7 @@ pub struct EntryEditor {
     root: FocusHandle,
     task: i64,
     composer: Option<Entity<TextInput>>,
+    refine: Option<Entity<TextInput>>,
     drafts: Vec<Draft>,
     from_ai: bool,
     busy: bool,
@@ -38,6 +39,7 @@ impl EntryEditor {
             root,
             task: 0,
             composer: None,
+            refine: None,
             drafts: Vec::new(),
             from_ai: false,
             busy: false,
@@ -60,6 +62,7 @@ impl EntryEditor {
 
     pub fn reset(&mut self, cx: &mut Context<Self>) {
         self.composer = None;
+        self.refine = None;
         self.drafts.clear();
         self.busy = false;
         self.error = None;
@@ -88,6 +91,16 @@ impl EntryEditor {
             });
             cx.subscribe_in(&input, window, Self::on_composer).detach();
             self.composer = Some(input);
+        }
+        if self.refine.is_none() {
+            let input = cx.new(|cx| {
+                TextInput::new(
+                    "Ask the AI to change this, e.g. merge the first two, make each 1h",
+                    cx,
+                )
+            });
+            cx.subscribe_in(&input, window, Self::on_refine).detach();
+            self.refine = Some(input);
         }
         if let Some(c) = &self.composer {
             window.focus(&c.focus_handle(cx), cx);
@@ -121,6 +134,113 @@ impl EntryEditor {
                 cx.notify();
             }
         }
+    }
+
+    fn on_refine(
+        &mut self,
+        _: &Entity<TextInput>,
+        ev: &InputEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        match ev {
+            InputEvent::Submit => self.revise(cx),
+            InputEvent::Cancel => {
+                self.dismiss(window, cx);
+            }
+            InputEvent::Changed => {
+                self.error = None;
+                cx.notify();
+            }
+        }
+    }
+
+    fn snapshot(&self, cx: &App) -> Vec<WorkItem> {
+        let today = date::iso(self.store.read(cx).today);
+        self.drafts
+            .iter()
+            .map(|d| WorkItem {
+                name: d.name.read(cx).text().trim().to_string(),
+                hours: parse_hours(d.hours.read(cx).text()).unwrap_or(0.),
+                date: Some(d.date.read(cx).text().trim().to_string())
+                    .filter(|t| date::is_valid(t))
+                    .unwrap_or(today.clone()),
+                done: d.done,
+            })
+            .filter(|i| !i.name.is_empty())
+            .collect()
+    }
+
+    fn revise(&mut self, cx: &mut Context<Self>) {
+        let Some(refine) = &self.refine else {
+            return;
+        };
+        let instruction = refine.read(cx).text().trim().to_string();
+        let store = self.store.read(cx);
+        let (Some(task), today) = (store.task(self.task).cloned(), store.today) else {
+            return;
+        };
+        if instruction.is_empty() || self.busy {
+            return;
+        }
+        let current = self.snapshot(cx);
+        self.busy = true;
+        self.error = None;
+        cx.spawn(async move |this, cx| {
+            let r = cx
+                .background_executor()
+                .spawn(async move { ai::revise_items(&task.name, &current, &instruction, today) })
+                .await;
+            this.update(cx, |this, cx| {
+                this.busy = false;
+                match r {
+                    Ok(items) => {
+                        this.drafts = items.iter().map(|i| this.make_draft(i, cx)).collect();
+                        if let Some(r) = &this.refine {
+                            r.update(cx, |i, cx| i.set_text("", cx));
+                        }
+                    }
+                    Err(e) => this.error = Some(format!("AI: {e}").into()),
+                }
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+        cx.notify();
+    }
+
+    fn refine_row(&self, window: &Window, cx: &mut Context<Self>) -> Option<gpui::AnyElement> {
+        let input = self.refine.as_ref()?;
+        let focused = input.focus_handle(cx).is_focused(window);
+        Some(
+            div()
+                .flex()
+                .items_center()
+                .gap(px(8.))
+                .child(
+                    div()
+                        .flex_1()
+                        .flex()
+                        .items_center()
+                        .gap(px(8.))
+                        .px(px(10.))
+                        .py(px(5.))
+                        .rounded(px(6.))
+                        .border_1()
+                        .border_color(rgb(if focused { PURPLE.fg } else { AI_BORDER }))
+                        .bg(rgb(PAGE))
+                        .child(icon("sparkle", 14., PURPLE.fg))
+                        .child(div().flex_1().min_w_0().child(input.clone())),
+                )
+                .child(
+                    Button::new("revise", if self.busy { "Revising…" } else { "Revise" })
+                        .variant(Variant::Ai)
+                        .disabled(self.busy)
+                        .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.revise(cx))),
+                )
+                .into_any_element(),
+        )
     }
 
     fn make_draft(&self, item: &WorkItem, cx: &mut Context<Self>) -> Draft {
@@ -314,7 +434,7 @@ impl EntryEditor {
             )
     }
 
-    fn draft_card(&self, cx: &mut Context<Self>) -> Card {
+    fn draft_card(&self, window: &Window, cx: &mut Context<Self>) -> Card {
         let items = self.read(cx).unwrap_or_default();
         let logged: f64 = items.iter().map(|i| i.hours).sum();
         let n = self.drafts.len();
@@ -335,13 +455,17 @@ impl EntryEditor {
             }
         };
         let (title, tint) = if self.from_ai {
-            ("Drafted by AI · edit anything, nothing saved yet", Tint::Ai)
+            (
+                "Drafted by AI · edit rows or ask for changes, nothing saved yet",
+                Tint::Ai,
+            )
         } else {
             ("New entries · nothing saved yet", Tint::Neutral)
         };
         Card::new(title)
             .tint(tint)
             .error(self.error.clone())
+            .children(self.from_ai.then(|| self.refine_row(window, cx)).flatten())
             .child(
                 div()
                     .flex()
@@ -430,6 +554,8 @@ impl Render for EntryEditor {
         let composer = self.composer.clone().filter(|_| self.drafts.is_empty());
         div()
             .children(composer.map(|c| self.composer_card(&c, window, cx)))
-            .when(!self.drafts.is_empty(), |d| d.child(self.draft_card(cx)))
+            .when(!self.drafts.is_empty(), |d| {
+                d.child(self.draft_card(window, cx))
+            })
     }
 }

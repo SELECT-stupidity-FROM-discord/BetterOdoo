@@ -51,14 +51,52 @@ Split the log into separate pieces of work. For each piece give:
 Reply only {{"items": [{{"name": "...", "hours": 0, "date": "YYYY-MM-DD", "done": true}}]}}."#,
         weekday = date::weekday(today),
     );
-    let v = chat(&system, log)?;
+    parse_items(&chat(&system, log)?, log, &today_iso)
+}
+
+pub fn revise_items(
+    task: &str,
+    current: &[WorkItem],
+    instruction: &str,
+    today: i64,
+) -> Result<Vec<WorkItem>> {
+    let today_iso = date::iso(today);
+    let system = format!(
+        r#"You edit a draft list of sub-tasks for the Odoo task "{task}".
+Today is {weekday} {today_iso}.
+You get the current draft as JSON and an instruction. Apply the instruction and return the full updated list.
+Keep every item the instruction does not mention exactly as it is. Keep ticket IDs such as TC-ABF-12 exactly.
+Item fields: name, hours (number), date (YYYY-MM-DD), done (true/false).
+Reply only {{"items": [{{"name": "...", "hours": 0, "date": "YYYY-MM-DD", "done": true}}]}}."#,
+        weekday = date::weekday(today),
+    );
+    let draft: Vec<Value> = current
+        .iter()
+        .map(|i| json!({"name": i.name, "hours": i.hours, "date": i.date, "done": i.done}))
+        .collect();
+    let user = format!(
+        "Current draft:\n{}\n\nInstruction: {instruction}",
+        json!({"items": draft})
+    );
+    let known = format!(
+        "{user}\n{}",
+        current
+            .iter()
+            .map(|i| i.name.as_str())
+            .collect::<Vec<_>>()
+            .join("\n")
+    );
+    parse_items(&chat(&system, &user)?, &known, &today_iso)
+}
+
+fn parse_items(v: &Value, known: &str, today_iso: &str) -> Result<Vec<WorkItem>> {
     let items: Vec<WorkItem> = v["items"]
         .as_array()
         .into_iter()
         .flatten()
         .filter_map(|i| {
             let name = i["name"].as_str()?.trim();
-            let name = keep_known_ids(name, log);
+            let name = keep_known_ids(name, known);
             (!name.is_empty()).then(|| WorkItem {
                 name: name.chars().take(250).collect(),
                 hours: i["hours"]
@@ -68,7 +106,7 @@ Reply only {{"items": [{{"name": "...", "hours": 0, "date": "YYYY-MM-DD", "done"
                 date: i["date"]
                     .as_str()
                     .filter(|d| date::is_valid(d))
-                    .map_or(today_iso.clone(), String::from),
+                    .map_or(today_iso.to_string(), String::from),
                 done: i["done"].as_bool().unwrap_or(true),
             })
         })
