@@ -4,11 +4,12 @@ use crate::date;
 use crate::format::person_tone;
 use crate::input::{InputEvent, TextInput};
 use crate::odoo::{Change, Message};
+use crate::scale::px;
 use crate::store::{Load, Store};
 use crate::theme::*;
 use gpui::{
     ClickEvent, Context, Entity, EventEmitter, FocusHandle, Focusable, FontWeight, IntoElement,
-    Render, Window, div, prelude::*, px, rgb,
+    Render, Window, div, prelude::*, rgb,
 };
 
 pub struct ActivityTab {

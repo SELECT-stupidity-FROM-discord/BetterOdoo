@@ -1,8 +1,9 @@
+use crate::scale::px;
 use crate::theme::Tone;
 use crate::theme::{BORDER, FONT, PAGE, SIDEBAR, TEXT, TEXT_SOFT};
 use gpui::{
     App, BoxShadow, ClickEvent, Div, FontWeight, MouseDownEvent, SharedString, Svg, Window, black,
-    div, point, prelude::*, px, rgb, svg,
+    div, point, prelude::*, rgb, svg,
 };
 
 pub type OnClick = Box<dyn Fn(&ClickEvent, &mut Window, &mut App)>;

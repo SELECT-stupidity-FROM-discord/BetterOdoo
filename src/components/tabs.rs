@@ -1,7 +1,8 @@
+use crate::scale::px;
 use crate::theme::*;
 use gpui::{
     App, ClickEvent, FontWeight, IntoElement, PathBuilder, RenderOnce, SharedString, Window,
-    canvas, div, point, prelude::*, px, rgb,
+    canvas, div, point, prelude::*, rgb,
 };
 
 struct Item {

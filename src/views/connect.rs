@@ -1,10 +1,11 @@
 use crate::components::{Button, Field, Variant, icon, tag};
 use crate::input::{InputEvent, TextInput};
 use crate::odoo::{Auth, Login, Odoo, Probe};
+use crate::scale::px;
 use crate::theme::*;
 use gpui::{
     BoxShadow, ClickEvent, Context, Div, Entity, EventEmitter, Focusable, FontWeight,
-    HighlightStyle, SharedString, Stateful, StyledText, Window, div, point, prelude::*, px, rgb,
+    HighlightStyle, SharedString, Stateful, StyledText, Window, div, point, prelude::*, rgb,
 };
 use std::{sync::Arc, time::Duration};
 

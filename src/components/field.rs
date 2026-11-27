@@ -1,6 +1,7 @@
 use crate::input::TextInput;
+use crate::scale::px;
 use crate::theme::*;
-use gpui::{App, Entity, Focusable, IntoElement, RenderOnce, Window, div, prelude::*, px, rgb};
+use gpui::{App, Entity, Focusable, IntoElement, RenderOnce, Window, div, prelude::*, rgb};
 
 #[derive(IntoElement)]
 pub struct Field {

@@ -1,7 +1,8 @@
+use crate::scale::px;
 use crate::theme::*;
 use gpui::{
     AnyElement, App, FontWeight, IntoElement, ParentElement, RenderOnce, SharedString, Window, div,
-    prelude::*, px, rgb,
+    prelude::*, rgb,
 };
 
 use super::icon;

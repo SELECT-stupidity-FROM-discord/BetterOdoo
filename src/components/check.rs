@@ -1,6 +1,7 @@
 use super::icon;
+use crate::scale::px;
 use crate::theme::*;
-use gpui::{App, IntoElement, RenderOnce, Window, div, prelude::*, px, rgb};
+use gpui::{App, IntoElement, RenderOnce, Window, div, prelude::*, rgb};
 
 #[derive(IntoElement)]
 pub struct Checkbox {

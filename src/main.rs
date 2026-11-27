@@ -7,6 +7,7 @@ mod html;
 mod input;
 mod odoo;
 mod ollama;
+mod scale;
 mod settings;
 mod store;
 mod theme;
@@ -14,10 +15,11 @@ mod tree;
 mod views;
 
 use gpui::{
-    App, Bounds, Context, Entity, FocusHandle, KeyDownEvent, TitlebarOptions, Window, WindowBounds,
-    WindowOptions, div, prelude::*, px, rgb, size,
+    App, Bounds, Context, Entity, FocusHandle, KeyBinding, KeyDownEvent, TitlebarOptions, Window,
+    WindowBounds, WindowOptions, actions, div, prelude::*, rgb, size,
 };
 use odoo::{Login, Odoo};
+use scale::px;
 use std::sync::Arc;
 use store::Store;
 use theme::*;
@@ -28,6 +30,44 @@ use views::{
     task_list::{ListEvent, TaskList},
     task_page::{PageEvent, TaskPage},
 };
+
+actions!(better_odoo, [ZoomIn, ZoomOut, ZoomReset]);
+
+fn zoom(next: impl Fn(f32) -> f32, cx: &mut App) {
+    let v = scale::set(next(scale::get()));
+    settings::set_zoom(v);
+    for window in cx.windows() {
+        window
+            .update(cx, |_, window, _| {
+                window.set_rem_size(gpui::px(16. * v));
+                window.refresh();
+            })
+            .ok();
+    }
+}
+
+macro_rules! key {
+    ($k:literal) => {
+        if cfg!(target_os = "macos") {
+            concat!("cmd-", $k)
+        } else {
+            concat!("ctrl-", $k)
+        }
+    };
+}
+
+fn bind_zoom(cx: &mut App) {
+    cx.bind_keys([
+        KeyBinding::new(key!("="), ZoomIn, None),
+        KeyBinding::new(key!("+"), ZoomIn, None),
+        KeyBinding::new(key!("shift-="), ZoomIn, None),
+        KeyBinding::new(key!("-"), ZoomOut, None),
+        KeyBinding::new(key!("0"), ZoomReset, None),
+    ]);
+    cx.on_action(|_: &ZoomIn, cx| zoom(|v| v + 0.1, cx));
+    cx.on_action(|_: &ZoomOut, cx| zoom(|v| v - 0.1, cx));
+    cx.on_action(|_: &ZoomReset, cx| zoom(|_| 1.0, cx));
+}
 
 const KEYCHAIN: &str = "BetterOdoo";
 
@@ -326,6 +366,8 @@ fn main() {
         .run(|cx: &mut App| {
             assets::load_fonts(cx).expect("bundled fonts load");
             input::bind_keys(cx);
+            bind_zoom(cx);
+            scale::set(settings::zoom().unwrap_or(1.0));
             let bounds = Bounds::centered(None, size(px(1440.), px(900.)), cx);
             cx.open_window(
                 WindowOptions {

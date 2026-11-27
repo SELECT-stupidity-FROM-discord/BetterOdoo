@@ -1,8 +1,9 @@
 use super::icon;
+use crate::scale::px;
 use crate::theme::*;
 use gpui::{
     AnyElement, App, ClickEvent, ElementId, FontWeight, IntoElement, MouseButton, MouseDownEvent,
-    ParentElement, RenderOnce, SharedString, Window, div, prelude::*, px, rgb,
+    ParentElement, RenderOnce, SharedString, Window, div, prelude::*, rgb,
 };
 
 #[derive(IntoElement)]

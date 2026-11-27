@@ -1,7 +1,8 @@
+use crate::scale::px;
 use crate::theme::*;
 use gpui::{
     App, ClickEvent, ElementId, FontWeight, IntoElement, MouseButton, MouseDownEvent, RenderOnce,
-    SharedString, Window, div, prelude::*, px, rgb,
+    SharedString, Window, div, prelude::*, rgb,
 };
 
 #[derive(IntoElement)]

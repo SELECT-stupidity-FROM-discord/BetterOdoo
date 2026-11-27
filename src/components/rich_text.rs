@@ -1,9 +1,10 @@
 use super::icon;
 use crate::html::{Block, Run};
+use crate::scale::px;
 use crate::theme::*;
 use gpui::{
     App, FontWeight, HighlightStyle, IntoElement, RenderOnce, StyledText, Window, div, prelude::*,
-    px, rgb,
+    rgb,
 };
 
 #[derive(IntoElement)]

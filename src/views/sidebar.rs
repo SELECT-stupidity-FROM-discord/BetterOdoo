@@ -1,10 +1,11 @@
 use crate::components::{Floating, IconButton, NavItem, kbd};
+use crate::scale::px;
 use crate::store::Store;
 use crate::theme::*;
 use crate::views::task_list::{TOP_PEOPLE, TaskList};
 use gpui::{
     ClickEvent, Context, Div, Entity, EventEmitter, FontWeight, MouseDownEvent, Window, div,
-    prelude::*, px, rgb, white,
+    prelude::*, rgb, white,
 };
 
 pub enum SidebarEvent {
@@ -101,6 +102,11 @@ impl Sidebar {
         } else {
             "/  Ctrl K"
         };
+        let zoom = if cfg!(target_os = "macos") {
+            "⌘ +  −  0"
+        } else {
+            "Ctrl +  −  0"
+        };
         let people = format!("1–{}", people.clamp(1, TOP_PEOPLE));
         let rows = [
             ("j  k", "Move between tasks"),
@@ -111,6 +117,7 @@ impl Sidebar {
             ("0", "Everyone"),
             (filter, "Filter tasks"),
             ("a", "Autofill sub-tasks with AI"),
+            (zoom, "Zoom in, out, reset"),
             ("?", "Show shortcuts"),
         ];
         Floating::new("shortcuts")

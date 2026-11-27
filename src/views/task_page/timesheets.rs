@@ -4,11 +4,12 @@ use crate::date;
 use crate::format::{hours, parse_hours};
 use crate::input::{InputEvent, TextInput};
 use crate::odoo::WorkItem;
+use crate::scale::px;
 use crate::store::{Load, Store};
 use crate::theme::*;
 use gpui::{
     ClickEvent, Context, Entity, EventEmitter, FocusHandle, FontWeight, IntoElement, Render,
-    Window, div, prelude::*, px, rgb,
+    Window, div, prelude::*, rgb,
 };
 
 pub struct TimesheetTab {

@@ -3,12 +3,13 @@ use crate::components::{Button, Card, Checkbox, Field, Tint, Variant, icon, kbd}
 use crate::format::{hours, hours_text, parse_hours};
 use crate::input::{InputEvent, TextInput};
 use crate::odoo::WorkItem;
+use crate::scale::px;
 use crate::store::Store;
 use crate::theme::*;
 use crate::{ai, date};
 use gpui::{
     App, ClickEvent, Context, Entity, EventEmitter, FocusHandle, Focusable, SharedString, Window,
-    div, prelude::*, px, rgb,
+    div, prelude::*, rgb,
 };
 
 struct Draft {

@@ -7,13 +7,14 @@ use crate::components::{Button, Property, RichText, Segmented, TabBar, Variant, 
 use crate::date;
 use crate::format::{hours, stage_tone};
 use crate::odoo::Task;
+use crate::scale::px;
 use crate::store::{Load, Store, StoreEvent};
 use crate::theme::*;
 use activity::ActivityTab;
 use entries::EntryEditor;
 use gpui::{
     ClickEvent, Context, Entity, EventEmitter, FocusHandle, FontWeight, KeyDownEvent, SharedString,
-    Window, div, prelude::*, px, rgb,
+    Window, div, prelude::*, rgb,
 };
 use subtasks::SubtaskList;
 use timesheets::TimesheetTab;

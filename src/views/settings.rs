@@ -1,11 +1,12 @@
 use crate::components::{Button, Card, Field, Panel, Radio, Section, Tint, Variant, icon, tag};
 use crate::input::{InputEvent, TextInput};
 use crate::ollama::{self, Model};
+use crate::scale::px;
 use crate::settings;
 use crate::theme::*;
 use gpui::{
     ClickEvent, Context, Entity, EventEmitter, FontWeight, SharedString, Window, div, prelude::*,
-    px, rgb,
+    rgb,
 };
 use std::{
     sync::{Arc, Mutex},

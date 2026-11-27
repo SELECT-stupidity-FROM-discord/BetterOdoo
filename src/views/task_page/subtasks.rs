@@ -5,11 +5,12 @@ use crate::date;
 use crate::format::stage_tone;
 use crate::input::{InputEvent, TextInput};
 use crate::odoo::{Task, WorkItem};
+use crate::scale::px;
 use crate::store::Store;
 use crate::theme::*;
 use gpui::{
     ClickEvent, Context, Div, Entity, EventEmitter, FocusHandle, IntoElement, Render, SharedString,
-    Stateful, Window, div, prelude::*, px, rgb,
+    Stateful, Window, div, prelude::*, rgb,
 };
 
 #[derive(Clone)]

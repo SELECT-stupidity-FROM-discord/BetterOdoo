@@ -2,13 +2,14 @@ use crate::components::{Avatar, Chip, ColumnHeader, Floating, MenuHeader, MenuRo
 use crate::format::{person_tone, plural, short_name, stage_tone};
 use crate::input::{InputEvent, TextInput};
 use crate::odoo::Task;
+use crate::scale::px;
 use crate::store::Store;
 use crate::theme::*;
 use crate::{date, tree};
 use gpui::{
     App, ClickEvent, Context, Div, Entity, EventEmitter, FocusHandle, Focusable, FontWeight,
     KeyDownEvent, MouseDownEvent, ScrollStrategy, Stateful, UniformListScrollHandle, Window, div,
-    prelude::*, px, rgb, uniform_list,
+    prelude::*, rgb, uniform_list,
 };
 use std::{collections::HashSet, ops::Range};
 

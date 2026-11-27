@@ -1,9 +1,10 @@
 use super::{icon, popover};
+use crate::scale::px;
 use crate::theme::*;
 use gpui::{
     Anchor, AnyElement, App, ClickEvent, ElementId, FontWeight, IntoElement, MouseDownEvent,
     ParentElement, RenderOnce, SharedString, Window, anchored, deferred, div, point, prelude::*,
-    px, rgb,
+    rgb,
 };
 
 #[derive(IntoElement)]
