@@ -27,6 +27,9 @@ pub struct Task {
     pub logged_hours: f64,
     pub done: bool,
     pub stage_since: Option<String>,
+    pub user_ids: Vec<i64>,
+    pub tags: Vec<(i64, String)>,
+    pub partner: Option<(i64, String)>,
 }
 
 #[derive(Clone, Debug)]
@@ -280,7 +283,8 @@ impl Odoo {
                 json!({"domain": domain, "fields": fields, "order": "priority desc, date_deadline asc"}),
             )
         };
-        let rows = query(&["state", "date_last_stage_update"])
+        let rows = query(&["state", "date_last_stage_update", "tag_ids", "partner_id"])
+            .or_else(|_| query(&["state", "date_last_stage_update"]))
             .or_else(|_| query(&["state"]))
             .or_else(|_| query(&[]))?;
         let stage_ids: Vec<i64> = rows
@@ -316,6 +320,35 @@ impl Odoo {
             .into_iter()
             .collect();
         let users = self.call("res.users", "read", json!({"ids": ids, "fields": ["name"]}))?;
+        let tag_ids: Vec<i64> = rows
+            .as_array()
+            .into_iter()
+            .flatten()
+            .flat_map(|r| r["tag_ids"].as_array().cloned().unwrap_or_default())
+            .filter_map(|v| v.as_i64())
+            .collect::<std::collections::BTreeSet<_>>()
+            .into_iter()
+            .collect();
+        let tag_names = if tag_ids.is_empty() {
+            json!([])
+        } else {
+            self.call(
+                "project.tags",
+                "read",
+                json!({"ids": tag_ids, "fields": ["name"]}),
+            )
+            .unwrap_or(json!([]))
+        };
+        let tag_name = |id: i64| {
+            tag_names
+                .as_array()
+                .into_iter()
+                .flatten()
+                .find(|t| t["id"] == id)
+                .and_then(|t| t["name"].as_str())
+                .unwrap_or("?")
+                .to_string()
+        };
         let name_of = |id: i64| {
             if id == self.uid {
                 return "Me".to_string();
@@ -355,6 +388,23 @@ impl Odoo {
                     .collect(),
                 deadline: r["date_deadline"].as_str().map(Into::into),
                 stage_since: r["date_last_stage_update"].as_str().map(Into::into),
+                user_ids: r["user_ids"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|v| v.as_i64())
+                    .collect(),
+                tags: r["tag_ids"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|v| v.as_i64())
+                    .map(|id| (id, tag_name(id)))
+                    .collect(),
+                partner: r["partner_id"]
+                    .get(0)
+                    .and_then(|v| v.as_i64())
+                    .map(|id| (id, m2o(&r["partner_id"]))),
                 priority_high: r["priority"] == "1",
                 logged_hours: r["effective_hours"].as_f64().unwrap_or(0.),
                 done: matches!(r["state"].as_str(), Some("1_done" | "1_canceled"))
@@ -608,6 +658,30 @@ impl Odoo {
             self.write(&[*id], json!({"sequence": (i as i64 + 1) * 10}))?;
         }
         Ok(())
+    }
+
+    pub fn options(&self, model: &str, query: &str) -> Result<Vec<(i64, String)>> {
+        let mut domain = vec![json!(["name", "ilike", query])];
+        match model {
+            "res.users" => domain.push(json!(["share", "=", false])),
+            "project.project" => domain.push(json!(["active", "=", true])),
+            _ => {}
+        }
+        let rows = self.call(
+            model,
+            "search_read",
+            json!({"domain": domain, "fields": ["name"], "limit": 25, "order": "name"}),
+        )?;
+        Ok(rows
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|r| Some((r["id"].as_i64()?, r["name"].as_str()?.to_string())))
+            .collect())
+    }
+
+    pub fn set_fields(&self, id: i64, vals: Value) -> Result<()> {
+        self.write(&[id], vals)
     }
 
     fn write(&self, ids: &[i64], vals: Value) -> Result<()> {

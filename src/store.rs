@@ -235,6 +235,53 @@ impl Store {
         });
     }
 
+    pub fn edit(
+        &mut self,
+        id: i64,
+        what: &'static str,
+        vals: serde_json::Value,
+        reload: bool,
+        patch: impl FnOnce(&mut Task),
+        cx: &mut Context<Self>,
+    ) {
+        let Some(o) = self.odoo.clone() else { return };
+        if let Some(t) = self.tasks.iter_mut().find(|t| t.id == id) {
+            patch(t);
+        }
+        cx.notify();
+        cx.spawn(async move |this, cx| {
+            let r = cx
+                .background_executor()
+                .spawn(async move { o.set_fields(id, vals) })
+                .await;
+            this.update(cx, |this, cx| {
+                if let Err(e) = &r {
+                    cx.emit(StoreEvent::Failed(format!("{what}: {e}").into()));
+                }
+                if r.is_err() || reload {
+                    this.reload(cx);
+                }
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    pub fn search_options(
+        &self,
+        model: &'static str,
+        query: String,
+        cx: &mut Context<Self>,
+    ) -> gpui::Task<Result<Vec<(i64, String)>, SharedString>> {
+        let Some(o) = self.odoo.clone() else {
+            return gpui::Task::ready(Err("Not connected".into()));
+        };
+        cx.background_executor().spawn(async move {
+            o.options(model, &query)
+                .map_err(|e| SharedString::from(e.to_string()))
+        })
+    }
+
     pub fn toggle_done(&mut self, id: i64, cx: &mut Context<Self>) {
         let Some(t) = self.tasks.iter_mut().find(|t| t.id == id) else {
             return;

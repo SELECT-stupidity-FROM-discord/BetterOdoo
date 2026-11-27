@@ -1,11 +1,12 @@
 mod activity;
 mod entries;
+mod properties;
 mod subtasks;
 mod timesheets;
 
-use crate::components::{Button, Property, RichText, Segmented, TabBar, Variant, tag};
+use crate::components::{Button, RichText, Segmented, TabBar, Variant, tag};
 use crate::date;
-use crate::format::{hours, stage_tone};
+use crate::format::stage_tone;
 use crate::odoo::Task;
 use crate::scale::px;
 use crate::store::{Load, Store, StoreEvent};
@@ -16,6 +17,7 @@ use gpui::{
     ClickEvent, Context, Entity, EventEmitter, FocusHandle, FontWeight, KeyDownEvent, SharedString,
     Window, div, prelude::*, rgb,
 };
+use properties::Properties;
 use subtasks::SubtaskList;
 use timesheets::TimesheetTab;
 
@@ -46,6 +48,7 @@ pub struct TaskPage {
     subtasks: Entity<SubtaskList>,
     timesheets: Entity<TimesheetTab>,
     activity: Entity<ActivityTab>,
+    properties: Entity<Properties>,
     project_label: SharedString,
 }
 
@@ -70,6 +73,9 @@ impl TaskPage {
             cx.new(|cx| SubtaskList::new(store.clone(), root.clone(), entries.clone(), window, cx));
         let timesheets = cx.new(|cx| TimesheetTab::new(store.clone(), root.clone(), window, cx));
         let activity = cx.new(|cx| ActivityTab::new(store.clone(), root.clone(), window, cx));
+        let properties = cx.new(|cx| Properties::new(store.clone(), root.clone(), window, cx));
+        cx.subscribe_in(&properties, window, Self::on_child)
+            .detach();
         cx.subscribe_in(&activity, window, Self::on_child).detach();
         cx.subscribe_in(&subtasks, window, Self::on_child).detach();
         cx.subscribe_in(&timesheets, window, Self::on_child)
@@ -84,6 +90,7 @@ impl TaskPage {
             subtasks,
             timesheets,
             activity,
+            properties,
             project_label: "My Tasks".into(),
         }
     }
@@ -109,6 +116,7 @@ impl TaskPage {
         self.subtasks.update(cx, |s, cx| s.set_task(id, cx));
         self.timesheets.update(cx, |t, cx| t.set_task(id, cx));
         self.activity.update(cx, |a, cx| a.set_task(id, cx));
+        self.properties.update(cx, |p, cx| p.set_task(id, cx));
         self.store.update(cx, |s, cx| {
             s.ensure_detail(id, cx);
             s.ensure_stages(project.flatten(), cx);
@@ -318,11 +326,6 @@ impl Render for TaskPage {
         let subs = store.children_of(self.id);
         let mut due = date::due(t.deadline.as_deref(), today);
         due.overdue &= !t.done;
-        let assignees = if t.assignees.is_empty() {
-            "Unassigned".to_string()
-        } else {
-            t.assignees.join(", ")
-        };
 
         let body = match self.tab {
             Tab::Description => self.description(cx),
@@ -360,28 +363,7 @@ impl Render for TaskPage {
                     .when_some(self.notice.clone(), |d, n| {
                         d.child(div().text_size(px(13.)).text_color(rgb(DANGER)).child(n))
                     })
-                    .child(
-                        div()
-                            .flex()
-                            .flex_col()
-                            .gap(px(10.))
-                            .child(
-                                Property::new("status", "Project")
-                                    .child(div().child(t.project.clone())),
-                            )
-                            .child(Property::new("user", "Assignees").child(div().child(assignees)))
-                            .child(
-                                Property::new("calendar", "Due").child(
-                                    div()
-                                        .when(due.overdue, |d| d.text_color(rgb(DANGER)))
-                                        .child(due.label),
-                                ),
-                            )
-                            .child(
-                                Property::new("clock", "Logged")
-                                    .child(div().child(hours(t.logged_hours))),
-                            ),
-                    )
+                    .child(self.properties.clone())
                     .child(
                         div()
                             .flex()
