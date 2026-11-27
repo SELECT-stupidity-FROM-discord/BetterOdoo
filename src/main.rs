@@ -15,7 +15,7 @@ use gpui::{
     WindowOptions, anchored, deferred, div, point, prelude::*, px, rgb, size, uniform_list, white,
 };
 use input::{InputEvent, TextInput};
-use odoo::{Login, Odoo, SubTask, Task};
+use odoo::{Login, Odoo, SubTask, Task, WorkItem};
 use serde_json::json;
 use std::{
     collections::{HashMap, HashSet},
@@ -26,7 +26,7 @@ use theme::*;
 use ui::{icon, kbd, popover, tag};
 
 struct Proposal {
-    name: String,
+    item: WorkItem,
     keep: bool,
 }
 
@@ -42,6 +42,9 @@ struct BetterOdoo {
     selected: usize,
     status: SharedString,
     proposed: Vec<Proposal>,
+    composer: Option<Entity<TextInput>>,
+    drafting: bool,
+    ai_error: Option<SharedString>,
     page: bool,
     people_menu: bool,
     shortcuts: bool,
@@ -72,6 +75,9 @@ impl BetterOdoo {
             selected: 0,
             status: "Connecting…".into(),
             proposed: vec![],
+            composer: None,
+            drafting: false,
+            ai_error: None,
             page: false,
             people_menu: false,
             shortcuts: false,
@@ -186,7 +192,7 @@ impl BetterOdoo {
             InputEvent::Changed => {
                 self.selected = 0;
                 self.rows_scroll.scroll_to_item(0, ScrollStrategy::Top);
-                self.proposed.clear();
+                self.reset_ai();
             }
             InputEvent::Submit => window.focus(&self.focus, cx),
             InputEvent::Cancel => {
@@ -237,26 +243,79 @@ impl BetterOdoo {
         self.visible(cx).get(self.selected).map(|t| (*t).clone())
     }
 
-    fn suggest_subtasks(&mut self, cx: &mut Context<Self>) {
-        let Some(t) = self.selected_task(cx).map(|t| t.name) else {
+    fn open_composer(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.selected_task(cx).is_none() {
+            return;
+        }
+        self.page = true;
+        if self.composer.is_none() {
+            let input = cx.new(|cx| {
+                TextInput::new(
+                    "Fixed the ETA card and added driver contact, 2h. Push notifications yesterday, 3h.",
+                    cx,
+                )
+                .multiline()
+            });
+            cx.subscribe_in(&input, window, Self::on_composer).detach();
+            self.composer = Some(input);
+        }
+        if let Some(composer) = &self.composer {
+            window.focus(&composer.focus_handle(cx), cx);
+        }
+        cx.notify();
+    }
+
+    fn on_composer(
+        &mut self,
+        _: &Entity<TextInput>,
+        ev: &InputEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        match ev {
+            InputEvent::Submit => self.draft(cx),
+            InputEvent::Cancel => {
+                self.reset_ai();
+                window.focus(&self.focus, cx);
+            }
+            InputEvent::Changed => self.ai_error = None,
+        }
+        cx.notify();
+    }
+
+    fn reset_ai(&mut self) {
+        self.proposed.clear();
+        self.composer = None;
+        self.drafting = false;
+        self.ai_error = None;
+    }
+
+    fn draft(&mut self, cx: &mut Context<Self>) {
+        let (Some(task), Some(composer)) = (self.selected_task(cx), &self.composer) else {
             return;
         };
-        self.status = "Drafting sub-tasks…".into();
+        let log = composer.read(cx).text().trim().to_string();
+        if log.is_empty() || self.drafting {
+            return;
+        }
+        self.drafting = true;
+        self.ai_error = None;
+        let today = self.today;
         cx.spawn(async move |this, cx| {
             let r = cx
                 .background_executor()
-                .spawn(async move { ai::subtasks(&t) })
+                .spawn(async move { ai::work_items(&task.name, &log, today) })
                 .await;
             this.update(cx, |this, cx| {
+                this.drafting = false;
                 match r {
-                    Ok(s) => {
-                        this.status = "Synced just now".into();
-                        this.proposed = s
+                    Ok(items) => {
+                        this.proposed = items
                             .into_iter()
-                            .map(|name| Proposal { name, keep: true })
-                            .collect();
+                            .map(|item| Proposal { item, keep: true })
+                            .collect()
                     }
-                    Err(e) => this.status = format!("AI: {e}").into(),
+                    Err(e) => this.ai_error = Some(format!("AI: {e}").into()),
                 }
                 cx.notify();
             })
@@ -286,26 +345,45 @@ impl BetterOdoo {
         .detach();
     }
 
-    fn commit_subtasks(&mut self, cx: &mut Context<Self>) {
-        let (Some(o), Some(t)) = (self.odoo.clone(), self.selected_task(cx).map(|t| t.id)) else {
+    fn commit_work(&mut self, cx: &mut Context<Self>) {
+        let (Some(o), Some(task)) = (self.odoo.clone(), self.selected_task(cx)) else {
             return;
         };
-        let names: Vec<String> = std::mem::take(&mut self.proposed)
-            .into_iter()
+        let items: Vec<WorkItem> = self
+            .proposed
+            .iter()
             .filter(|p| p.keep)
-            .map(|p| p.name)
+            .map(|p| p.item.clone())
             .collect();
+        if items.is_empty() || self.drafting {
+            return;
+        }
+        self.drafting = true;
         cx.spawn(async move |this, cx| {
+            let parent = task.id;
             let r = cx
                 .background_executor()
-                .spawn(async move { o.create_subtasks(t, &names) })
+                .spawn(async move { o.add_work(&task, &items).map(|_| items) })
                 .await;
-            this.update(cx, |this, cx| match r {
-                Ok(()) => this.reload(cx),
-                Err(e) => {
-                    this.status = e.to_string().into();
-                    cx.notify();
+            this.update(cx, |this, cx| {
+                this.drafting = false;
+                match r {
+                    Ok(items) => {
+                        let logged: f64 = items.iter().map(|i| i.hours).sum();
+                        this.reset_ai();
+                        this.subtasks.remove(&parent);
+                        this.reload(cx);
+                        this.status = format!(
+                            "Added {} sub-task{} · logged {}",
+                            items.len(),
+                            if items.len() == 1 { "" } else { "s" },
+                            hours(logged)
+                        )
+                        .into();
+                    }
+                    Err(e) => this.ai_error = Some(e.to_string().into()),
                 }
+                cx.notify();
             })
             .ok();
         })
@@ -316,11 +394,11 @@ impl BetterOdoo {
         self.assignee = who;
         self.selected = 0;
         self.rows_scroll.scroll_to_item(0, ScrollStrategy::Top);
-        self.proposed.clear();
+        self.reset_ai();
     }
 
     fn on_key(&mut self, ev: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
-        if self.filter.focus_handle(cx).is_focused(window) {
+        if !self.focus.is_focused(window) {
             return;
         }
         let n = self.visible(cx).len();
@@ -335,20 +413,21 @@ impl BetterOdoo {
             "/" => window.focus(&self.filter.focus_handle(cx), cx),
             "j" | "down" if self.selected + 1 < n => {
                 self.selected += 1;
-                self.proposed.clear();
+                self.reset_ai();
             }
             "k" | "up" => {
                 self.selected = self.selected.saturating_sub(1);
-                self.proposed.clear();
+                self.reset_ai();
             }
-            "s" => self.suggest_subtasks(cx),
-            "enter" if !self.proposed.is_empty() => self.commit_subtasks(cx),
+            "a" => self.open_composer(window, cx),
+            "enter" if !self.proposed.is_empty() => self.commit_work(cx),
             "enter" if n > 0 => self.page = true,
             "escape" if self.people_menu => self.people_menu = false,
             "escape" if self.shortcuts => self.shortcuts = false,
             "escape" if self.stage_menu => self.stage_menu = false,
             "escape" if self.people_header_menu => self.people_header_menu = false,
             "escape" if !self.proposed.is_empty() => self.proposed.clear(),
+            "escape" if self.composer.is_some() => self.reset_ai(),
             "escape" => self.page = false,
             "0" => self.set_assignee(None),
             d if d.len() == 1 && d.as_bytes()[0].is_ascii_digit() => {
@@ -658,7 +737,7 @@ impl Render for BetterOdoo {
                         this.page = false;
                         this.selected = 0;
                         this.rows_scroll.scroll_to_item(0, ScrollStrategy::Top);
-                        this.proposed.clear();
+                        this.reset_ai();
                         cx.notify()
                     })),
             );
@@ -889,7 +968,7 @@ impl Render for BetterOdoo {
             self.ensure_subtasks(id, cx);
         }
         let content = match selected {
-            Some(t) => self.detail(t, cx).into_any_element(),
+            Some(t) => self.detail(t, window, cx).into_any_element(),
             None => main.into_any_element(),
         };
 
@@ -923,7 +1002,7 @@ impl BetterOdoo {
             (people.as_str(), "Filter by person"),
             ("0", "Everyone"),
             (filter, "Filter tasks"),
-            ("s", "Suggest sub-tasks with AI"),
+            ("a", "Autofill sub-tasks with AI"),
             ("?", "Show shortcuts"),
         ];
         deferred(
@@ -1130,7 +1209,7 @@ impl BetterOdoo {
                     .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| {
                         this.selected = i;
                         this.page = true;
-                        this.proposed.clear();
+                        this.reset_ai();
                         window.focus(&this.focus, cx);
                         cx.notify()
                     }))
@@ -1210,7 +1289,7 @@ impl BetterOdoo {
             .collect()
     }
 
-    fn detail(&self, t: &Task, cx: &mut Context<Self>) -> Stateful<Div> {
+    fn detail(&self, t: &Task, window: &Window, cx: &mut Context<Self>) -> Stateful<Div> {
         let panel = div()
             .flex()
             .flex_col()
@@ -1257,7 +1336,7 @@ impl BetterOdoo {
                                 .child(self.project.clone().unwrap_or("My Tasks".into()))
                                 .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
                                     this.page = false;
-                                    this.proposed.clear();
+                                    this.reset_ai();
                                     cx.notify()
                                 })),
                         )
@@ -1319,7 +1398,7 @@ impl BetterOdoo {
                         )
                         .child(
                             div()
-                                .id("suggest")
+                                .id("autofill")
                                 .flex()
                                 .items_center()
                                 .gap(px(6.))
@@ -1335,9 +1414,9 @@ impl BetterOdoo {
                                 .font_weight(FontWeight::MEDIUM)
                                 .cursor_pointer()
                                 .child(icon("sparkle", 14., PURPLE.fg))
-                                .child("Suggest with AI")
-                                .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
-                                    this.suggest_subtasks(cx)
+                                .child("Autofill with AI")
+                                .on_click(cx.listener(|this, _: &ClickEvent, window, cx| {
+                                    this.open_composer(window, cx)
                                 })),
                         ),
                 )
@@ -1388,11 +1467,11 @@ impl BetterOdoo {
                     )
                 })
                 .when(
-                    self.proposed.is_empty() && existing.is_some_and(|s| s.is_empty()),
+                    self.composer.is_none() && existing.is_some_and(|s| s.is_empty()),
                     |d| {
                         let text =
-                            "No sub-tasks yet. Press s and AI will draft a few for you to review.";
-                        let key = text.find(" s ").map_or(0..0, |i| i + 1..i + 2);
+                            "No sub-tasks yet. Press a, describe what you did, and AI fills them in with timesheets.";
+                        let key = text.find(" a,").map_or(0..0, |i| i + 1..i + 2);
                         d.child(div().text_size(px(13.)).text_color(rgb(MUTED)).child(
                             StyledText::new(text).with_highlights([(
                                 key,
@@ -1405,6 +1484,9 @@ impl BetterOdoo {
                         ))
                     },
                 )
+                .when(self.composer.is_some() && self.proposed.is_empty(), |d| {
+                    d.child(self.composer_card(window, cx))
+                })
                 .when(!self.proposed.is_empty(), |d| {
                     d.child(self.proposal(kept, cx))
                 });
@@ -1421,33 +1503,133 @@ impl BetterOdoo {
             .child(inner)
     }
 
-    fn proposal(&self, kept: usize, cx: &mut Context<Self>) -> Div {
-        let button = |id: &'static str| {
-            div()
-                .id(id)
-                .px(px(14.))
-                .py(px(7.))
-                .min_h(px(34.))
-                .rounded(px(6.))
-                .cursor_pointer()
-        };
+    fn ai_button(&self, id: &'static str, label: String, primary: bool) -> Stateful<Div> {
+        div()
+            .id(id)
+            .flex()
+            .items_center()
+            .px(px(14.))
+            .py(px(7.))
+            .min_h(px(34.))
+            .rounded(px(6.))
+            .cursor_pointer()
+            .text_size(px(13.))
+            .when(primary, |d| {
+                d.bg(rgb(ACCENT))
+                    .text_color(white())
+                    .font_weight(FontWeight::MEDIUM)
+            })
+            .when(!primary, |d| {
+                d.border_1()
+                    .border_color(rgb(BORDER))
+                    .bg(rgb(PAGE))
+                    .text_color(rgb(TEXT_SOFT))
+            })
+            .when(self.drafting, |d| d.opacity(0.6))
+            .child(label)
+    }
+
+    fn ai_card(&self, title: &'static str) -> Div {
         div()
             .flex()
             .flex_col()
-            .gap(px(8.))
+            .gap(px(10.))
             .p(px(14.))
             .rounded(px(8.))
             .bg(rgb(PURPLE.bg))
             .child(
                 div()
+                    .flex()
+                    .items_center()
+                    .gap(px(6.))
                     .text_size(px(12.))
                     .font_weight(FontWeight::MEDIUM)
                     .text_color(rgb(PURPLE.fg))
-                    .child("Drafted by AI · nothing saved yet"),
+                    .child(icon("sparkle", 13., PURPLE.fg))
+                    .child(title),
             )
+            .when_some(self.ai_error.clone(), |d, e| {
+                d.child(div().text_size(px(13.)).text_color(rgb(DANGER)).child(e))
+            })
+    }
+
+    fn composer_card(&self, window: &Window, cx: &mut Context<Self>) -> Div {
+        let Some(composer) = &self.composer else {
+            return div();
+        };
+        let focused = composer.focus_handle(cx).is_focused(window);
+        let submit = if cfg!(target_os = "macos") {
+            "⌘"
+        } else {
+            "Ctrl"
+        };
+        self.ai_card("Describe what you did")
+            .child(
+                div()
+                    .min_h(px(88.))
+                    .px(px(12.))
+                    .py(px(10.))
+                    .rounded(px(6.))
+                    .border_1()
+                    .border_color(rgb(if focused { PURPLE.fg } else { AI_BORDER }))
+                    .bg(rgb(PAGE))
+                    .line_height(px(21.))
+                    .child(composer.clone()),
+            )
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(px(8.))
+                    .child(
+                        div()
+                            .flex_1()
+                            .flex()
+                            .items_center()
+                            .gap(px(4.))
+                            .text_size(px(12.))
+                            .text_color(rgb(MUTED))
+                            .child(kbd(submit))
+                            .child(kbd("↵"))
+                            .child("to draft · Esc to cancel"),
+                    )
+                    .child(
+                        self.ai_button(
+                            "draft",
+                            if self.drafting {
+                                "Drafting…"
+                            } else {
+                                "Draft"
+                            }
+                            .into(),
+                            true,
+                        )
+                        .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.draft(cx))),
+                    ),
+            )
+    }
+
+    fn proposal(&self, kept: usize, cx: &mut Context<Self>) -> Div {
+        let logged: f64 = self
+            .proposed
+            .iter()
+            .filter(|p| p.keep)
+            .map(|p| p.item.hours)
+            .sum();
+        let action = format!(
+            "Add {kept} sub-task{}{}",
+            if kept == 1 { "" } else { "s" },
+            if logged > 0. {
+                format!(" · log {}", hours(logged))
+            } else {
+                String::new()
+            }
+        );
+        self.ai_card("Drafted by AI · nothing saved yet")
             .children(self.proposed.iter().enumerate().map(|(i, p)| {
                 let check = div()
                     .flex_none()
+                    .mt(px(2.))
                     .size(px(15.))
                     .rounded(px(3.))
                     .flex()
@@ -1458,14 +1640,31 @@ impl BetterOdoo {
                 } else {
                     check.bg(rgb(PAGE)).border_1().border_color(rgb(MUTED))
                 };
+                let when = date::due(Some(&p.item.date), self.today).label;
                 div()
                     .id(("proposal", i))
                     .flex()
-                    .items_center()
+                    .items_start()
                     .gap(px(10.))
                     .cursor_pointer()
                     .child(check)
-                    .child(div().flex_1().min_w_0().child(p.name.clone()))
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .text_color(rgb(if p.keep { TEXT } else { MUTED }))
+                            .child(p.item.name.clone()),
+                    )
+                    .child(
+                        div()
+                            .flex_none()
+                            .flex()
+                            .gap(px(10.))
+                            .text_size(px(12.))
+                            .text_color(rgb(MUTED))
+                            .child(hours(p.item.hours))
+                            .child(div().w(px(76.)).flex().justify_end().child(when)),
+                    )
                     .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
                         this.proposed[i].keep = !this.proposed[i].keep;
                         cx.notify()
@@ -1475,33 +1674,21 @@ impl BetterOdoo {
                 div()
                     .flex()
                     .gap(px(8.))
-                    .mt(px(6.))
-                    .text_size(px(13.))
+                    .mt(px(4.))
                     .child(
-                        button("create")
-                            .bg(rgb(ACCENT))
-                            .text_color(white())
-                            .font_weight(FontWeight::MEDIUM)
+                        self.ai_button("create", action, true)
                             .when(kept == 0, |d| d.opacity(0.5))
-                            .child(format!(
-                                "Create {kept} sub-task{}",
-                                if kept == 1 { "" } else { "s" }
-                            ))
-                            .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
-                                if kept > 0 {
-                                    this.commit_subtasks(cx)
-                                }
-                            })),
+                            .on_click(
+                                cx.listener(|this, _: &ClickEvent, _, cx| this.commit_work(cx)),
+                            ),
                     )
                     .child(
-                        button("discard")
-                            .border_1()
-                            .border_color(rgb(BORDER))
-                            .bg(rgb(PAGE))
-                            .text_color(rgb(TEXT_SOFT))
-                            .child("Discard")
-                            .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                        self.ai_button("discard", "Edit description".into(), false)
+                            .on_click(cx.listener(|this, _: &ClickEvent, window, cx| {
                                 this.proposed.clear();
+                                if let Some(c) = &this.composer {
+                                    window.focus(&c.focus_handle(cx), cx);
+                                }
                                 cx.notify()
                             })),
                     ),

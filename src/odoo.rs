@@ -385,15 +385,6 @@ impl Odoo {
         }
         Ok(())
     }
-
-    pub fn create_subtasks(&self, parent: i64, names: &[String]) -> Result<()> {
-        let vals: Vec<Value> = names
-            .iter()
-            .map(|n| json!({"name": n, "parent_id": parent}))
-            .collect();
-        self.call("project.task", "create", json!({"vals_list": vals}))?;
-        Ok(())
-    }
 }
 
 fn m2o(v: &Value) -> String {
