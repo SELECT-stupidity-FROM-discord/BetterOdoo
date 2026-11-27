@@ -1,5 +1,5 @@
 use super::ChildEvent;
-use crate::components::{Button, Field, Variant};
+use crate::components::{Button, Variant, icon};
 use crate::date;
 use crate::format::{hours, parse_hours};
 use crate::input::{InputEvent, TextInput};
@@ -35,8 +35,8 @@ impl TimesheetTab {
         };
         let (name, hours, day) = (
             input("What did you work on?", cx),
-            input("Hours", cx),
-            input("YYYY-MM-DD", cx),
+            input("1h 30m", cx),
+            input("Today (YYYY-MM-DD)", cx),
         );
         for i in [&name, &hours, &day] {
             cx.subscribe_in(i, window, Self::on_input).detach();
@@ -119,6 +119,51 @@ impl TimesheetTab {
     }
 }
 
+fn pill(icon_name: &'static str, width: f32, input: &Entity<TextInput>) -> impl IntoElement {
+    div()
+        .flex()
+        .items_center()
+        .gap(px(8.))
+        .w(px(width))
+        .px(px(10.))
+        .py(px(5.))
+        .rounded(px(7.))
+        .bg(rgb(SIDEBAR))
+        .border_1()
+        .border_color(rgb(BORDER))
+        .child(icon(icon_name, 14., MUTED))
+        .child(div().flex_1().child(input.clone()))
+}
+
+impl TimesheetTab {
+    fn composer(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        div()
+            .flex()
+            .flex_col()
+            .gap(px(10.))
+            .p(px(12.))
+            .rounded(px(10.))
+            .border_1()
+            .border_color(rgb(BORDER))
+            .child(div().px(px(2.)).child(self.name.clone()))
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(px(8.))
+                    .child(pill("clock", 120., &self.hours))
+                    .child(pill("calendar", 150., &self.day))
+                    .child(div().flex_1())
+                    .child(
+                        Button::new("log-time", "Log time")
+                            .icon("plus")
+                            .variant(Variant::Primary)
+                            .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.log(cx))),
+                    ),
+            )
+    }
+}
+
 impl Render for TimesheetTab {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let store = self.store.read(cx);
@@ -161,19 +206,11 @@ impl Render for TimesheetTab {
                     )
             }
         };
-        div().flex().flex_col().gap(px(14.)).child(list).child(
-            div()
-                .flex()
-                .items_center()
-                .gap(px(8.))
-                .child(div().flex_1().child(Field::new(&self.name)))
-                .child(div().w(px(80.)).child(Field::new(&self.hours)))
-                .child(div().w(px(116.)).child(Field::new(&self.day)))
-                .child(
-                    Button::new("log-time", "Log time")
-                        .variant(Variant::Primary)
-                        .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.log(cx))),
-                ),
-        )
+        div()
+            .flex()
+            .flex_col()
+            .gap(px(20.))
+            .child(self.composer(cx))
+            .child(list)
     }
 }
