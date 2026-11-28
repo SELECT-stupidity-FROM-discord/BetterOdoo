@@ -10,10 +10,45 @@ use gpui::{
     MouseButton, MouseDownEvent, Render, SharedString, Window, black, div, point, prelude::*, rgb,
     white,
 };
+use std::time::{Duration, Instant};
 
 const FAB_BG: u32 = 0x262522;
 const FAB_HOVER: u32 = 0x1b1a18;
 const FAB_BORDER: u32 = 0x1d1c19;
+const OPEN_DURATION: Duration = Duration::from_millis(220);
+const CLOSE_DURATION: Duration = Duration::from_millis(160);
+
+/// Strong UI ease-out: cubic-bezier(0.23, 1.0, 0.32, 1.0).
+fn ease_out_ui(x: f32) -> f32 {
+    let x = x.clamp(0.0, 1.0);
+    if x <= 0.0 || x >= 1.0 {
+        return x;
+    }
+    const X1: f32 = 0.23;
+    const Y1: f32 = 1.0;
+    const X2: f32 = 0.32;
+    const Y2: f32 = 1.0;
+
+    let sample_x = |t: f32| {
+        let u = 1.0 - t;
+        3.0 * u * u * t * X1 + 3.0 * u * t * t * X2 + t * t * t
+    };
+    let sample_dx = |t: f32| {
+        let u = 1.0 - t;
+        3.0 * u * u * X1 + 6.0 * u * t * (X2 - X1) + 3.0 * t * t * (1.0 - X2)
+    };
+    let mut t = x;
+    for _ in 0..6 {
+        let err = sample_x(t) - x;
+        let dx = sample_dx(t);
+        if dx.abs() < 1e-6 {
+            break;
+        }
+        t = (t - err / dx).clamp(0.0, 1.0);
+    }
+    let u = 1.0 - t;
+    (3.0 * u * u * t * Y1 + 3.0 * u * t * t * Y2 + t * t * t).clamp(0.0, 1.0)
+}
 
 pub struct NewTask {
     store: Entity<Store>,
@@ -36,6 +71,11 @@ pub struct NewTask {
     assignee_token: u64,
     customer_token: u64,
     open: bool,
+    mounted: bool,
+    anim_start: Option<Instant>,
+    anim_from: f32,
+    anim_to: f32,
+    anim_duration: Duration,
     busy: bool,
     notice: Option<SharedString>,
 }
@@ -102,13 +142,36 @@ impl NewTask {
             assignee_token: 0,
             customer_token: 0,
             open: false,
+            mounted: false,
+            anim_start: None,
+            anim_from: 0.0,
+            anim_to: 0.0,
+            anim_duration: OPEN_DURATION,
             busy: false,
             notice: None,
         }
     }
 
+    fn current_progress(&self) -> (f32, bool) {
+        if let Some(start) = self.anim_start {
+            let raw = (start.elapsed().as_secs_f32() / self.anim_duration.as_secs_f32())
+                .clamp(0.0, 1.0);
+            let eased = ease_out_ui(raw);
+            let t = (self.anim_from + (self.anim_to - self.anim_from) * eased).clamp(0.0, 1.0);
+            (t, raw < 1.0)
+        } else {
+            (if self.open { 1.0 } else { 0.0 }, false)
+        }
+    }
+
     fn open_modal(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let (cur, _) = self.current_progress();
         self.open = true;
+        self.mounted = true;
+        self.anim_from = cur;
+        self.anim_to = 1.0;
+        self.anim_duration = OPEN_DURATION;
+        self.anim_start = Some(Instant::now());
         self.notice = None;
         window.focus(&self.title.focus_handle(cx), cx);
         self.load_initial_options(cx);
@@ -172,13 +235,19 @@ impl NewTask {
     }
 
     pub fn dismiss(&mut self, cx: &mut Context<Self>) -> bool {
-        let was = std::mem::take(&mut self.open);
-        if was {
-            self.due.update(cx, |d, cx| d.dismiss(cx));
-            self.notice = None;
-            cx.notify();
+        if !self.open {
+            return false;
         }
-        was
+        let (cur, _) = self.current_progress();
+        self.open = false;
+        self.anim_from = cur;
+        self.anim_to = 0.0;
+        self.anim_duration = CLOSE_DURATION;
+        self.anim_start = Some(Instant::now());
+        self.due.update(cx, |d, cx| d.dismiss(cx));
+        self.notice = None;
+        cx.notify();
+        true
     }
 
     fn close(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -403,7 +472,13 @@ impl NewTask {
             })
     }
 
-    fn modal(&self, window: &Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn modal(
+        &self,
+        t: f32,
+        reduce_motion: bool,
+        window: &Window,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
         let store = self.store.read(cx);
         let all_people = store.people();
         let desc_focused = self.description.focus_handle(cx).is_focused(window);
@@ -619,28 +694,34 @@ impl NewTask {
             ))
         });
 
+        let lift = if reduce_motion { 0.0 } else { 18.0 * (1.0 - t) };
+        let open = self.open;
         div()
             .id("new-task-backdrop")
             .absolute()
             .inset_0()
-            .occlude()
-            .bg(black().opacity(0.42))
+            .when(open, |d| d.occlude())
+            .bg(black().opacity(0.42 * t))
             .flex()
             .items_start()
             .justify_center()
             .pt(px(52.))
             .pb(px(32.))
             .px(px(24.))
-            .on_mouse_down(
-                MouseButton::Left,
-                cx.listener(|this, _: &MouseDownEvent, window, cx| this.close(window, cx)),
-            )
+            .when(open, |d| {
+                d.on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(|this, _: &MouseDownEvent, window, cx| this.close(window, cx)),
+                )
+            })
             .child(
                 div()
                     .id("new-task-modal")
                     .w(px(640.))
                     .max_w_full()
                     .max_h_full()
+                    .mt(px(lift))
+                    .opacity(t)
                     .rounded(px(16.))
                     .bg(rgb(PAGE))
                     .border_1()
@@ -648,9 +729,9 @@ impl NewTask {
                     .flex()
                     .flex_col()
                     .shadow(vec![
-                        shadow(0.10, 2., 6., 0.),
-                        shadow(0.16, 16., 40., -6.),
-                        shadow(0.14, 28., 64., -12.),
+                        shadow(0.10 * t, 2., 6., 0.),
+                        shadow(0.16 * t, 16., 40., -6.),
+                        shadow(0.14 * t, 28., 64., -12.),
                     ])
                     .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                     // Header
@@ -1081,9 +1162,22 @@ impl NewTask {
 
 impl Render for NewTask {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        if self.open {
-            return self.modal(window, cx).into_any_element();
+        let (t, running) = self.current_progress();
+        if running {
+            cx.on_next_frame(window, |_, _, cx| cx.notify());
+        } else if self.anim_start.is_some() {
+            self.anim_start = None;
+            if !self.open {
+                self.mounted = false;
+            }
         }
+        let reduce = cx.reduce_motion();
+        let fab_alpha = (1.0 - t * 1.4).clamp(0.0, 1.0);
+        let fab_drop = if reduce {
+            0.0
+        } else {
+            8.0 * (1.0 - fab_alpha)
+        };
         let shadow = |alpha: f32, y: f32, blur: f32, spread: f32| BoxShadow {
             color: black().opacity(alpha),
             offset: point(px(0.), px(y)),
@@ -1098,53 +1192,89 @@ impl Render for NewTask {
             spread_radius: px(0.),
             inset: true,
         };
-        div()
-            .absolute()
-            .right(px(28.))
-            .bottom(px(24.))
-            .child(
-                div()
-                    .id("new-task-fab")
-                    .flex()
-                    .items_center()
-                    .gap(px(9.))
-                    .h(px(40.))
-                    .pl(px(7.))
-                    .pr(px(16.))
-                    .rounded_full()
-                    .bg(rgb(FAB_BG))
-                    .border_1()
-                    .border_color(rgb(FAB_BORDER))
-                    .text_size(px(13.5))
-                    .font_weight(FontWeight::MEDIUM)
-                    .text_color(white())
-                    .cursor_pointer()
-                    .hover(|s| s.bg(rgb(FAB_HOVER)))
-                    .shadow(vec![
-                        specular,
-                        shadow(0.14, 1., 2., 0.),
-                        shadow(0.14, 6., 16., -3.),
-                        shadow(0.10, 14., 28., -6.),
-                    ])
-                    .child(
-                        div()
-                            .size(px(26.))
-                            .rounded_full()
-                            .bg(white().opacity(0.13))
-                            .flex()
-                            .items_center()
-                            .justify_center()
-                            .child(icon("plus", 13., 0xffffff)),
-                    )
-                    .child("New task")
-                    .on_mouse_down(
-                        MouseButton::Left,
-                        cx.listener(|this, _: &MouseDownEvent, window, cx| {
-                            cx.stop_propagation();
-                            this.open_modal(window, cx);
-                        }),
-                    ),
-            )
-            .into_any_element()
+        let fab = (fab_alpha > 0.01).then(|| {
+            div()
+                .absolute()
+                .right(px(28.))
+                .bottom(px(24. - fab_drop))
+                .opacity(fab_alpha)
+                .child(
+                    div()
+                        .id("new-task-fab")
+                        .flex()
+                        .items_center()
+                        .gap(px(9.))
+                        .h(px(40.))
+                        .pl(px(7.))
+                        .pr(px(16.))
+                        .rounded_full()
+                        .bg(rgb(FAB_BG))
+                        .border_1()
+                        .border_color(rgb(FAB_BORDER))
+                        .text_size(px(13.5))
+                        .font_weight(FontWeight::MEDIUM)
+                        .text_color(white())
+                        .cursor_pointer()
+                        .hover(|s| s.bg(rgb(FAB_HOVER)))
+                        .shadow(vec![
+                            specular,
+                            shadow(0.14, 1., 2., 0.),
+                            shadow(0.14, 6., 16., -3.),
+                            shadow(0.10, 14., 28., -6.),
+                        ])
+                        .child(
+                            div()
+                                .size(px(26.))
+                                .rounded_full()
+                                .bg(white().opacity(0.13))
+                                .flex()
+                                .items_center()
+                                .justify_center()
+                                .child(icon("plus", 13., 0xffffff)),
+                        )
+                        .child("New task")
+                        .on_mouse_down(
+                            MouseButton::Left,
+                            cx.listener(|this, _: &MouseDownEvent, window, cx| {
+                                cx.stop_propagation();
+                                this.open_modal(window, cx);
+                            }),
+                        ),
+                )
+        });
+
+        if !self.mounted {
+            return fab.unwrap_or_else(div).into_any_element();
+        }
+        if self.open {
+            div()
+                .absolute()
+                .inset_0()
+                .children(fab)
+                .child(self.modal(t, reduce, window, cx))
+                .into_any_element()
+        } else {
+            div()
+                .absolute()
+                .inset_0()
+                .child(self.modal(t, reduce, window, cx))
+                .children(fab)
+                .into_any_element()
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn ease_out_ui_is_monotonic_and_front_loaded() {
+        assert_eq!(ease_out_ui(0.0), 0.0);
+        assert_eq!(ease_out_ui(1.0), 1.0);
+        let q1 = ease_out_ui(0.25);
+        let q2 = ease_out_ui(0.5);
+        let q3 = ease_out_ui(0.75);
+        assert!(q1 > 0.65 && q1 < q2 && q2 < q3 && q3 < 1.0);
     }
 }
