@@ -38,7 +38,8 @@ impl About {
             this.update(cx, |this, cx| {
                 this.status = match r {
                     Ok(c) => Status::Done(c),
-                    Err(_) => {
+                    Err(e) => {
+                        log::warn!("update check failed: {e}");
                         Status::Failed("Couldn’t reach GitHub. Check your connection.".into())
                     }
                 };

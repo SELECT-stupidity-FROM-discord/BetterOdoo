@@ -1,5 +1,6 @@
 pub mod about;
 pub mod connect;
+pub mod diagnostics;
 pub mod employees;
 pub mod new_task;
 pub mod settings;

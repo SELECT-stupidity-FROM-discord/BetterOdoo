@@ -165,6 +165,30 @@ impl Login {
     }
 }
 
+impl Login {
+    fn method(&self) -> &'static str {
+        match self.auth {
+            Auth::Password { .. } => "password",
+            Auth::ApiKey(_) => "API key",
+            Auth::Session(_) => "session cookie",
+        }
+    }
+
+    // Registers everything secret about this login so logs never contain it.
+    fn hide_in_logs(&self) {
+        use crate::logging::add_secret;
+        add_secret(&self.db);
+        match &self.auth {
+            Auth::Password { login, password } => {
+                add_secret(login);
+                add_secret(password);
+            }
+            Auth::ApiKey(key) => add_secret(key),
+            Auth::Session(cookie) => add_secret(cookie),
+        }
+    }
+}
+
 pub struct Probe {
     pub url: String,
     pub version: String,
@@ -188,8 +212,15 @@ fn subdomain(url: &str) -> String {
 
 impl Odoo {
     fn bare(url: &str) -> Self {
+        let url = normalize_url(url);
+        crate::logging::add_secret(
+            url.split("://")
+                .last()
+                .unwrap_or(&url)
+                .trim_end_matches('/'),
+        );
         Self {
-            url: normalize_url(url),
+            url,
             agent: ureq::Agent::new_with_defaults(),
             cookie: None,
             bearer: None,
@@ -200,9 +231,10 @@ impl Odoo {
 
     pub fn probe(input: &str) -> Result<Probe> {
         let me = Self::bare(input);
-        let version = me
-            .version()
-            .map_err(|_| anyhow!("No Odoo server answered at this address"))?;
+        let version = me.version().map_err(|e| {
+            log::warn!("probe failed: {e}");
+            anyhow!("No Odoo server answered at this address")
+        })?;
         let db = me
             .rpc("/web/database/list", json!({}))
             .ok()
@@ -235,6 +267,8 @@ impl Odoo {
 
     pub fn connect(login: &Login) -> Result<Self> {
         let mut me = Self::bare(&login.url);
+        login.hide_in_logs();
+        log::info!("signing in with {}", login.method());
         match &login.auth {
             Auth::Password {
                 login: user,
@@ -306,6 +340,7 @@ impl Odoo {
                     if !transient {
                         return Err(e);
                     }
+                    log::warn!("temporary server error, retrying: {msg}");
                     last_err = Some(e);
                 }
             }
@@ -340,7 +375,7 @@ impl Odoo {
     pub fn call(&self, model: &str, method: &str, mut kw: Value) -> Result<Value> {
         if let Some((key, db)) = &self.bearer {
             let url = format!("{}/json/2/{model}/{method}", self.url);
-            return self.send_with_retry(|| {
+            let r = self.send_with_retry(|| {
                 let mut req = self
                     .agent
                     .post(&url)
@@ -350,6 +385,10 @@ impl Odoo {
                 }
                 Ok(req.send_json(&kw)?.body_mut().read_json()?)
             });
+            if let Err(e) = &r {
+                log::warn!("{model}.{method} failed: {e}");
+            }
+            return r;
         }
         let mut take = |key: &str| kw.as_object_mut().and_then(|o| o.remove(key));
         let args = take("ids")
@@ -360,7 +399,7 @@ impl Odoo {
             json!({"model": model, "method": method, "args": args, "kwargs": kw}),
         );
         if let Err(e) = &r {
-            eprintln!("{model}.{method}: {e}");
+            log::warn!("{model}.{method} failed: {e}");
         }
         r
     }
@@ -839,7 +878,12 @@ impl Odoo {
             "name": input.name,
             "user_ids": [[6, 0, assignees]],
         });
-        if let Some(desc) = input.description.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+        if let Some(desc) = input
+            .description
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+        {
             let body = format!(
                 "<p>{}</p>",
                 desc.replace('&', "&amp;")

@@ -365,6 +365,7 @@ impl ConnectView {
     }
 
     fn fail(&mut self, message: &str, cx: &mut Context<Self>) {
+        log::warn!("sign-in failed: {message}");
         self.error = Some(message.to_string().into());
         cx.notify();
     }

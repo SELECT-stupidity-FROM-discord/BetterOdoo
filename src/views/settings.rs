@@ -1,4 +1,4 @@
-use super::about::About;
+use super::{about::About, diagnostics::Diagnostics};
 use crate::components::{Avatar, Button, Card, Field, Panel, Radio, Section, Tint, Variant, tag};
 use crate::input::{InputEvent, TextInput};
 use crate::ollama::{self, Model};
@@ -55,6 +55,7 @@ pub struct SettingsView {
     notice: Option<(SharedString, bool)>,
     profile_notice: Option<(SharedString, bool)>,
     about: Entity<About>,
+    diagnostics: Entity<Diagnostics>,
 }
 
 impl EventEmitter<SettingsEvent> for SettingsView {}
@@ -79,6 +80,7 @@ impl SettingsView {
             notice: None,
             profile_notice: None,
             about: cx.new(|_| About::new()),
+            diagnostics: cx.new(|_| Diagnostics::new()),
         };
         view.refresh(cx);
         view
@@ -677,6 +679,13 @@ impl Render for SettingsView {
                         .children(self.progress())
                         .children(notice)
                         .child(self.catalogue(cx)),
+                    )
+                    .child(
+                        Section::new(
+                            "Diagnostics",
+                            "If something isn’t working, share these logs so it can be fixed.",
+                        )
+                        .child(self.diagnostics.clone()),
                     )
                     .child(
                         Section::new("About", "Version, updates, and source code.")

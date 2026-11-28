@@ -18,6 +18,10 @@ pub fn base() -> String {
 }
 
 fn chat(system: &str, user: &str) -> Result<Value> {
+    request(system, user).inspect_err(|e| log::warn!("AI request failed: {e}"))
+}
+
+fn request(system: &str, user: &str) -> Result<Value> {
     let base = base();
     let model = model();
     let mut req = ureq::post(format!("{base}/chat/completions"));

@@ -12,6 +12,7 @@ mod date;
 mod format;
 mod html;
 mod input;
+mod logging;
 mod odoo;
 mod ollama;
 mod scale;
@@ -233,6 +234,7 @@ impl BetterOdoo {
     }
 
     fn sign_out(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        log::info!("signed out");
         cx.delete_credentials(KEYCHAIN).detach();
         self.store.update(cx, |s, cx| s.disconnect(cx));
         self.list.update(cx, |l, _| l.reset());
@@ -614,6 +616,7 @@ impl Render for BetterOdoo {
 }
 
 fn main() {
+    logging::init();
     gpui_platform::application()
         .with_assets(assets::Assets)
         .run(|cx: &mut App| {
