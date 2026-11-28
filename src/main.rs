@@ -27,6 +27,7 @@ use theme::*;
 use views::{
     connect::{ConnectView, Connected},
     employees::{EmployeesEvent, EmployeesView},
+    new_task::NewTask,
     settings::{SettingsEvent, SettingsView},
     sidebar::{Section, Sidebar, SidebarEvent},
     task_list::{ListEvent, TaskList},
@@ -123,6 +124,7 @@ struct BetterOdoo {
     store: Entity<Store>,
     list: Entity<TaskList>,
     sidebar: Entity<Sidebar>,
+    new_task: Entity<NewTask>,
     section: Section,
     todos: Option<Entity<TodosView>>,
     timesheets: Option<Entity<TimesheetsView>>,
@@ -138,6 +140,7 @@ impl BetterOdoo {
         let store = cx.new(|_| Store::new());
         let list = cx.new(|cx| TaskList::new(store.clone(), focus.clone(), window, cx));
         let sidebar = cx.new(|cx| Sidebar::new(store.clone(), list.clone(), cx));
+        let new_task = cx.new(|cx| NewTask::new(store.clone(), focus.clone(), window, cx));
         cx.subscribe_in(&list, window, Self::on_list).detach();
         cx.subscribe_in(&sidebar, window, Self::on_sidebar).detach();
         if !cfg!(target_os = "macos") {
@@ -151,6 +154,7 @@ impl BetterOdoo {
             store,
             list,
             sidebar,
+            new_task,
             section: Section::Tasks,
             todos: None,
             timesheets: None,
@@ -496,7 +500,8 @@ impl BetterOdoo {
             return;
         }
         if key == "escape"
-            && (self.sidebar.update(cx, |s, cx| s.dismiss_shortcuts(cx))
+            && (self.new_task.update(cx, |n, cx| n.dismiss(cx))
+                || self.sidebar.update(cx, |s, cx| s.dismiss_shortcuts(cx))
                 || self
                     .todos
                     .as_ref()
@@ -572,18 +577,18 @@ impl Render for BetterOdoo {
             (Some(s), _) => s.clone().into_any_element(),
             (None, Some(p)) => p.clone().into_any_element(),
             (None, None) => match self.section {
-                Section::Todos => self
-                    .todos
-                    .clone()
-                    .map_or_else(|| self.list.clone().into_any_element(), IntoElement::into_any_element),
-                Section::Timesheets => self
-                    .timesheets
-                    .clone()
-                    .map_or_else(|| self.list.clone().into_any_element(), IntoElement::into_any_element),
-                Section::Employees => self
-                    .employees
-                    .clone()
-                    .map_or_else(|| self.list.clone().into_any_element(), IntoElement::into_any_element),
+                Section::Todos => self.todos.clone().map_or_else(
+                    || self.list.clone().into_any_element(),
+                    IntoElement::into_any_element,
+                ),
+                Section::Timesheets => self.timesheets.clone().map_or_else(
+                    || self.list.clone().into_any_element(),
+                    IntoElement::into_any_element,
+                ),
+                Section::Employees => self.employees.clone().map_or_else(
+                    || self.list.clone().into_any_element(),
+                    IntoElement::into_any_element,
+                ),
                 _ => self.list.clone().into_any_element(),
             },
         };
@@ -594,6 +599,7 @@ impl Render for BetterOdoo {
             .bg(rgb(PAGE))
             .child(self.sidebar.clone())
             .child(content)
+            .when(self.settings.is_none(), |d| d.child(self.new_task.clone()))
             .into_any_element();
         wrap_window_chrome(Some(workspace), body, window)
     }

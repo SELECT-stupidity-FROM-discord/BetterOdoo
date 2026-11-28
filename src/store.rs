@@ -216,6 +216,7 @@ impl Store {
         &mut self,
         name: String,
         deadline: Option<String>,
+        project: Option<i64>,
         cx: &mut Context<Self>,
     ) -> gpui::Task<Result<(), SharedString>> {
         let Some(o) = self.odoo.clone() else {
@@ -224,7 +225,7 @@ impl Store {
         cx.spawn(async move |this, cx| {
             let r = cx
                 .background_executor()
-                .spawn(async move { o.create_todo(&name, deadline.as_deref()) })
+                .spawn(async move { o.create_todo(&name, deadline.as_deref(), project) })
                 .await
                 .map_err(|e| SharedString::from(e.to_string()));
             this.update(cx, |this, cx| {

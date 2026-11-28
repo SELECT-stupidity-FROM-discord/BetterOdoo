@@ -168,11 +168,12 @@ impl TodosView {
         self.adding = true;
         self.notice = None;
         self.new_title.update(cx, |i, cx| i.set_text("", cx));
-        self.new_day.update(cx, |d, cx| d.set_value(None, today, cx));
+        self.new_day
+            .update(cx, |d, cx| d.set_value(None, today, cx));
         cx.notify();
         let job = self
             .store
-            .update(cx, |s, cx| s.create_todo(name, deadline, cx));
+            .update(cx, |s, cx| s.create_todo(name, deadline, None, cx));
         cx.spawn(async move |this, cx| {
             let r = job.await;
             this.update(cx, |this, cx| {
@@ -579,15 +580,13 @@ impl Render for TodosView {
                             )
                             .child(div().text_color(rgb(MUTED)).child(summary)),
                     )
-                    .child(
-                        div()
-                            .pt(px(6.))
-                            .child(Button::new("todos-refresh", "Refresh").on_click(cx.listener(
-                                |this, _: &ClickEvent, _, cx| {
-                                    this.store.update(cx, |s, cx| s.reload_todos(cx));
-                                },
-                            ))),
-                    ),
+                    .child(div().pt(px(6.)).child(
+                        Button::new("todos-refresh", "Refresh").on_click(cx.listener(
+                            |this, _: &ClickEvent, _, cx| {
+                                this.store.update(cx, |s, cx| s.reload_todos(cx));
+                            },
+                        )),
+                    )),
             )
             .child(self.quick_add(cx))
             .child(self.toolbar(&all_todos, window, cx))

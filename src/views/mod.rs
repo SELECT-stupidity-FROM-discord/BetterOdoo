@@ -1,5 +1,6 @@
 pub mod connect;
 pub mod employees;
+pub mod new_task;
 pub mod settings;
 pub mod sidebar;
 pub mod task_filters;

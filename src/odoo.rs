@@ -357,7 +357,10 @@ impl Odoo {
     }
 
     pub fn todos(&self) -> Result<Vec<Task>> {
-        self.read_tasks(json!([["project_id", "=", false], ["parent_id", "=", false]]), true)
+        self.read_tasks(
+            json!([["project_id", "=", false], ["parent_id", "=", false]]),
+            true,
+        )
     }
 
     fn read_tasks(&self, domain: Value, personal_stage: bool) -> Result<Vec<Task>> {
@@ -813,13 +816,21 @@ impl Odoo {
         self.write(&[task], json!({"priority": if high { "1" } else { "0" }}))
     }
 
-    pub fn create_todo(&self, name: &str, deadline: Option<&str>) -> Result<()> {
+    pub fn create_todo(
+        &self,
+        name: &str,
+        deadline: Option<&str>,
+        project: Option<i64>,
+    ) -> Result<()> {
         let mut vals = json!({
             "name": name,
             "user_ids": [[6, 0, [self.uid]]],
         });
         if let Some(d) = deadline {
             vals["date_deadline"] = json!(d);
+        }
+        if let Some(p) = project {
+            vals["project_id"] = json!(p);
         }
         self.call("project.task", "create", json!({"vals_list": [vals]}))?;
         Ok(())
@@ -956,10 +967,7 @@ fn m2o(v: &Value) -> String {
     v.get(1).and_then(|s| s.as_str()).unwrap_or("—").into()
 }
 
-fn try_odoo_fallback<T>(
-    first: Result<T>,
-    next: impl FnOnce() -> Result<T>,
-) -> Result<T> {
+fn try_odoo_fallback<T>(first: Result<T>, next: impl FnOnce() -> Result<T>) -> Result<T> {
     match first {
         Ok(v) => Ok(v),
         Err(e) if e.to_string().starts_with("odoo:") => next(),
@@ -1086,7 +1094,9 @@ fn parse_thread_messages(
                     .flatten()
                     .filter_map(|entry| {
                         if let Some(tid) = entry.as_i64() {
-                            tracking_by_id.get(&tid).and_then(|t| parse_tracking_entry(t))
+                            tracking_by_id
+                                .get(&tid)
+                                .and_then(|t| parse_tracking_entry(t))
                         } else {
                             parse_tracking_entry(entry)
                         }
@@ -1123,7 +1133,12 @@ fn parse_thread_messages(
                 .get("name")
                 .and_then(|s| s.as_str())
                 .map(String::from)
-                .or_else(|| m["author_id"].get(1).and_then(|s| s.as_str()).map(String::from))
+                .or_else(|| {
+                    m["author_id"]
+                        .get(1)
+                        .and_then(|s| s.as_str())
+                        .map(String::from)
+                })
                 .unwrap_or_else(|| "System".into());
             let raw_body = m["body"]
                 .as_str()
