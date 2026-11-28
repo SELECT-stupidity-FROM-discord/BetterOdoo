@@ -44,7 +44,7 @@ pub fn work_items(task: &str, log: &str, today: i64) -> Result<Vec<WorkItem>> {
         r#"You turn a developer's work log into sub-tasks of the Odoo task "{task}".
 Today is {weekday} {today_iso}.
 Split the log into separate pieces of work. For each piece give:
-- name: a short title in the user's own wording, keeping ticket IDs such as TC-ABF-12 exactly
+- name: clean up the user's own wording only enough to read clearly, without over-summarizing or losing intricate details (preserve exact ticket IDs such as TC-ABF-12, specific components, endpoints, error/edge cases, root causes, and technical qualifiers)
 - hours: time spent as a number, 0 if not stated
 - date: the day it was done as YYYY-MM-DD, resolving words like "yesterday"; default {today_iso}
 - done: true unless the log says it is unfinished
@@ -65,7 +65,7 @@ pub fn revise_items(
         r#"You edit a draft list of sub-tasks for the Odoo task "{task}".
 Today is {weekday} {today_iso}.
 You get the current draft as JSON and an instruction. Apply the instruction and return the full updated list.
-Keep every item the instruction does not mention exactly as it is. Keep ticket IDs such as TC-ABF-12 exactly.
+Keep every item the instruction does not mention exactly as it is. When editing an item, only simplify phrasing where requested and preserve intricate technical details and exact ticket IDs such as TC-ABF-12.
 Item fields: name, hours (number), date (YYYY-MM-DD), done (true/false).
 Reply only {{"items": [{{"name": "...", "hours": 0, "date": "YYYY-MM-DD", "done": true}}]}}."#,
         weekday = date::weekday(today),
@@ -98,7 +98,7 @@ fn parse_items(v: &Value, known: &str, today_iso: &str) -> Result<Vec<WorkItem>>
             let name = i["name"].as_str()?.trim();
             let name = keep_known_ids(name, known);
             (!name.is_empty()).then(|| WorkItem {
-                name: name.chars().take(250).collect(),
+                name: name.chars().take(320).collect(),
                 hours: i["hours"]
                     .as_f64()
                     .filter(|h| h.is_finite() && (0.0..=24.0).contains(h))
