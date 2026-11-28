@@ -35,10 +35,7 @@ impl TimesheetTab {
         let input = |placeholder: &'static str, cx: &mut Context<Self>| {
             cx.new(|cx| TextInput::new(placeholder, cx))
         };
-        let (name, hours) = (
-            input("What did you work on?", cx),
-            input("1h 30m", cx),
-        );
+        let (name, hours) = (input("What did you work on?", cx), input("1h 30m", cx));
         let root_for_cal = root.clone();
         let day = cx.new(|cx| {
             DatePicker::new(

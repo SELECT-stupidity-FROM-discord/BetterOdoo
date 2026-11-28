@@ -82,10 +82,7 @@ impl RenderOnce for Card {
             .border_1()
             .border_color(rgb(if ai { AI_BORDER } else { BORDER }))
             .bg(rgb(if ai { PURPLE.bg } else { PAGE }))
-            .shadow(vec![
-                shadow(0.03, 1., 3., 0.),
-                shadow(0.04, 6., 16., -4.),
-            ])
+            .shadow(vec![shadow(0.03, 1., 3., 0.), shadow(0.04, 6., 16., -4.)])
             .child(
                 div()
                     .flex()

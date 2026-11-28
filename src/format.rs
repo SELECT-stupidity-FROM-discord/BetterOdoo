@@ -14,11 +14,7 @@ pub fn hours(h: f64) -> String {
 
 pub fn stage_tone(stage: &str) -> Tone {
     let s = stage.to_lowercase();
-    if s.contains("cancel")
-        || s.contains("block")
-        || s.contains("reject")
-        || s.contains("fail")
-    {
+    if s.contains("cancel") || s.contains("block") || s.contains("reject") || s.contains("fail") {
         STAGE_RED
     } else if s.contains("done")
         || s.contains("complet")
@@ -27,7 +23,10 @@ pub fn stage_tone(stage: &str) -> Tone {
         || s.contains("approv")
     {
         STAGE_GREEN
-    } else if s.contains("prod") || s.contains("deploy") || s.contains("live") || s.contains("releas")
+    } else if s.contains("prod")
+        || s.contains("deploy")
+        || s.contains("live")
+        || s.contains("releas")
     {
         STAGE_CYAN
     } else if s.contains("uat")
@@ -64,9 +63,9 @@ pub fn stage_tone(stage: &str) -> Tone {
             STAGE_PINK,
             STAGE_ORANGE,
         ];
-        let hash = s
-            .bytes()
-            .fold(0usize, |acc, b| acc.wrapping_mul(31).wrapping_add(b as usize));
+        let hash = s.bytes().fold(0usize, |acc, b| {
+            acc.wrapping_mul(31).wrapping_add(b as usize)
+        });
         FALLBACK[hash % FALLBACK.len()]
     }
 }

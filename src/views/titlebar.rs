@@ -230,7 +230,12 @@ fn control_button(
         .when(!danger, |d| {
             d.hover(|s| s.bg(rgb(HOVER)).text_color(rgb(TEXT)))
         })
-        .child(svg().path(format!("icons/{glyph}.svg")).size(px(13.)).flex_none());
+        .child(
+            svg()
+                .path(format!("icons/{glyph}.svg"))
+                .size(px(13.))
+                .flex_none(),
+        );
 
     // On Windows, `WindowControlArea` maps to native HTMINBUTTON/HTMAXBUTTON/HTCLOSE hit tests
     // (giving native maximize/restore toggle, Windows 11 Snap Layouts on hover, and WM_CLOSE).

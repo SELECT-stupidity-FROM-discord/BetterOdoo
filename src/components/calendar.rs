@@ -403,9 +403,9 @@ impl DatePicker {
                             .cursor_pointer()
                             .hover(|s| s.bg(rgb(HOVER)))
                             .child(icon("chevron-left", 14., TEXT_SOFT))
-                            .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
-                                this.step_month(-1, cx)
-                            })),
+                            .on_click(
+                                cx.listener(|this, _: &ClickEvent, _, cx| this.step_month(-1, cx)),
+                            ),
                     )
                     .child(
                         div()
@@ -431,9 +431,9 @@ impl DatePicker {
                             .cursor_pointer()
                             .hover(|s| s.bg(rgb(HOVER)))
                             .child(icon("chevron-right", 14., TEXT_SOFT))
-                            .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
-                                this.step_month(1, cx)
-                            })),
+                            .on_click(
+                                cx.listener(|this, _: &ClickEvent, _, cx| this.step_month(1, cx)),
+                            ),
                     ),
             )
             .child(

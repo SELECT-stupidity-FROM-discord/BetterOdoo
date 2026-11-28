@@ -241,15 +241,21 @@ impl EntryEditor {
                         .border_color(rgb(if focused { PURPLE.fg } else { AI_BORDER }))
                         .bg(rgb(PAGE))
                         .child(icon("sparkle", 14., PURPLE.fg))
-                        .child(div().flex_1().min_w_0().overflow_hidden().child(input.clone())),
+                        .child(
+                            div()
+                                .flex_1()
+                                .min_w_0()
+                                .overflow_hidden()
+                                .child(input.clone()),
+                        ),
                 )
                 .child(
                     Button::new("revise", if self.busy { "Revising…" } else { "Revise" })
                         .variant(Variant::Ai)
                         .disabled(self.busy)
-                        .on_click(cx.listener(|this, _: &ClickEvent, window, cx| {
-                            this.revise(window, cx)
-                        })),
+                        .on_click(
+                            cx.listener(|this, _: &ClickEvent, window, cx| this.revise(window, cx)),
+                        ),
                 )
                 .into_any_element(),
         )
@@ -674,9 +680,9 @@ impl EntryEditor {
                                     .icon("plus")
                                     .variant(Variant::Primary)
                                     .disabled(n == 0 || self.busy)
-                                    .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
-                                        this.commit(cx)
-                                    })),
+                                    .on_click(
+                                        cx.listener(|this, _: &ClickEvent, _, cx| this.commit(cx)),
+                                    ),
                             ),
                     ),
             )

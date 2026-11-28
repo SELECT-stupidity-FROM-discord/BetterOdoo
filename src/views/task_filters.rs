@@ -321,14 +321,22 @@ impl TaskFilters {
                     (Some(x), Some(y)) => x.cmp(&y),
                     (Some(_), None) => Ordering::Less,
                     (None, Some(_)) => Ordering::Greater,
-                    (None, None) => tasks[a].name.to_lowercase().cmp(&tasks[b].name.to_lowercase()),
+                    (None, None) => tasks[a]
+                        .name
+                        .to_lowercase()
+                        .cmp(&tasks[b].name.to_lowercase()),
                 }
             }),
             SortBy::LoggedHours => indices.sort_by(|&a, &b| {
                 tasks[b]
                     .logged_hours
                     .total_cmp(&tasks[a].logged_hours)
-                    .then_with(|| tasks[a].name.to_lowercase().cmp(&tasks[b].name.to_lowercase()))
+                    .then_with(|| {
+                        tasks[a]
+                            .name
+                            .to_lowercase()
+                            .cmp(&tasks[b].name.to_lowercase())
+                    })
             }),
             SortBy::StageAge => indices.sort_by(|&a, &b| {
                 let aa = tasks[a]
@@ -339,8 +347,12 @@ impl TaskFilters {
                     .stage_since
                     .as_deref()
                     .and_then(|s| date::days_since(s, today));
-                ab.cmp(&aa)
-                    .then_with(|| tasks[a].name.to_lowercase().cmp(&tasks[b].name.to_lowercase()))
+                ab.cmp(&aa).then_with(|| {
+                    tasks[a]
+                        .name
+                        .to_lowercase()
+                        .cmp(&tasks[b].name.to_lowercase())
+                })
             }),
             SortBy::Name => indices.sort_by(|&a, &b| {
                 tasks[a]
@@ -370,11 +382,7 @@ impl TaskFilters {
                     .unwrap_or_else(|| "No customer".into()),
             ],
             GroupBy::Due => vec![due_bucket(t, today).into()],
-            GroupBy::AssignedBy => vec![
-                t.creator
-                    .clone()
-                    .unwrap_or_else(|| "Unknown".into()),
-            ],
+            GroupBy::AssignedBy => vec![t.creator.clone().unwrap_or_else(|| "Unknown".into())],
             GroupBy::Priority => vec![if t.priority_high {
                 "High priority".into()
             } else {
@@ -383,7 +391,11 @@ impl TaskFilters {
         }
     }
 
-    pub fn group_order(&self, label: &str, count: usize) -> (usize, std::cmp::Reverse<usize>, String) {
+    pub fn group_order(
+        &self,
+        label: &str,
+        count: usize,
+    ) -> (usize, std::cmp::Reverse<usize>, String) {
         let rank = match self.group {
             GroupBy::Due => match label {
                 "Overdue" => 0,

@@ -106,9 +106,7 @@ impl EmployeesView {
     }
 
     fn matches(&self, e: &Employee, q: &str) -> bool {
-        self.department
-            .as_deref()
-            .is_none_or(|d| e.department == d)
+        self.department.as_deref().is_none_or(|d| e.department == d)
             && (q.is_empty()
                 || e.name.to_lowercase().contains(q)
                 || e.job_title.to_lowercase().contains(q)
@@ -245,11 +243,7 @@ impl EmployeesView {
         let n = store
             .tasks
             .iter()
-            .filter(|t| {
-                t.assignees
-                    .iter()
-                    .any(|a| a.eq_ignore_ascii_case(&e.name))
-            })
+            .filter(|t| t.assignees.iter().any(|a| a.eq_ignore_ascii_case(&e.name)))
             .count();
         (n > 0).then(|| (e.name.clone(), n))
     }
@@ -281,13 +275,11 @@ impl Render for EmployeesView {
                     .items_start()
                     .gap(px(10.))
                     .child(div().text_color(rgb(DANGER)).child(err.clone()))
-                    .child(
-                        Button::new("emp-retry", "Try again").on_click(cx.listener(
-                            |this, _: &ClickEvent, _, cx| {
-                                this.store.update(cx, |s, cx| s.reload_employees(cx));
-                            },
-                        )),
-                    )
+                    .child(Button::new("emp-retry", "Try again").on_click(cx.listener(
+                        |this, _: &ClickEvent, _, cx| {
+                            this.store.update(cx, |s, cx| s.reload_employees(cx));
+                        },
+                    )))
                     .into_any_element(),
             ),
             Load::Ready(employees) => {
@@ -346,12 +338,7 @@ impl Render for EmployeesView {
                                         .text_color(rgb(MUTED))
                                         .child(label),
                                 )
-                                .child(
-                                    div()
-                                        .text_size(px(13.))
-                                        .text_color(rgb(TEXT))
-                                        .child(value),
-                                )
+                                .child(div().text_size(px(13.)).text_color(rgb(TEXT)).child(value))
                         };
 
                         div()

@@ -258,7 +258,8 @@ impl TaskPage {
             cx.listener(move |this, _: &ClickEvent, _, cx| {
                 this.tab = which;
                 if which == Tab::Activity {
-                    this.store.update(cx, |s, cx| s.refresh_messages(this.id, cx));
+                    this.store
+                        .update(cx, |s, cx| s.refresh_messages(this.id, cx));
                 }
                 cx.notify()
             })

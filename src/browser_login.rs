@@ -77,8 +77,7 @@ mod macos {
 
             unsafe {
                 let config: Retained<AnyObject> = msg_send![config_cls, new];
-                let data_store: Retained<AnyObject> =
-                    msg_send![store_cls, nonPersistentDataStore];
+                let data_store: Retained<AnyObject> = msg_send![store_cls, nonPersistentDataStore];
                 let _: () = msg_send![&*config, setWebsiteDataStore: &*data_store];
 
                 let alloc: *mut AnyObject = msg_send![web_view_cls, alloc];

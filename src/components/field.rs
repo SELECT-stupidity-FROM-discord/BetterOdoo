@@ -35,14 +35,10 @@ impl RenderOnce for Field {
             .border_1()
             .border_color(rgb(if focused { ACCENT } else { BORDER }))
             .bg(rgb(if focused { PAGE } else { SIDEBAR }))
-            .when(!focused, |d| d.hover(|s| s.border_color(rgb(BORDER_STRONG))))
+            .when(!focused, |d| {
+                d.hover(|s| s.border_color(rgb(BORDER_STRONG)))
+            })
             .text_size(px(13.))
-            .child(
-                div()
-                    .flex_1()
-                    .min_w_0()
-                    .overflow_hidden()
-                    .child(self.input),
-            )
+            .child(div().flex_1().min_w_0().overflow_hidden().child(self.input))
     }
 }

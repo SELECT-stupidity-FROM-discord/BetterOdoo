@@ -133,9 +133,11 @@ impl TaskList {
 
     pub fn select(&mut self, id: i64, cx: &App) {
         let store = self.store.read(cx);
-        if let Some(i) = self.items(cx).iter().position(|item| {
-            matches!(item, ListItem::Task(r) if store.tasks[r.idx].id == id)
-        }) {
+        if let Some(i) = self
+            .items(cx)
+            .iter()
+            .position(|item| matches!(item, ListItem::Task(r) if store.tasks[r.idx].id == id))
+        {
             self.selected = i;
         }
     }
@@ -559,155 +561,175 @@ impl TaskList {
                 .child(label)
         };
 
-        let mut menu = Floating::new("filter-menu")
-            .width(360.)
-            .radius(16.)
-            .offset(8.)
-            .max_height(520.)
-            .padded(16., 14.)
-            .on_dismiss(cx.listener(|this, _: &MouseDownEvent, _, cx| {
-                this.close_menus();
-                cx.notify()
-            }))
-            .child(
-                div()
-                    .flex_none()
-                    .flex()
-                    .items_center()
-                    .justify_between()
-                    .child(
-                        div()
-                            .text_size(px(13.))
-                            .font_weight(FontWeight::SEMIBOLD)
-                            .text_color(rgb(TEXT))
-                            .child("Filters & Aggregations"),
-                    )
-                    .when(self.filters.active_count() > 0, |d| {
-                        d.child(
+        let mut menu =
+            Floating::new("filter-menu")
+                .width(360.)
+                .radius(16.)
+                .offset(8.)
+                .max_height(520.)
+                .padded(16., 14.)
+                .on_dismiss(cx.listener(|this, _: &MouseDownEvent, _, cx| {
+                    this.close_menus();
+                    cx.notify()
+                }))
+                .child(
+                    div()
+                        .flex_none()
+                        .flex()
+                        .items_center()
+                        .justify_between()
+                        .child(
                             div()
-                                .id("filters-reset-all")
-                                .px(px(8.))
-                                .py(px(2.))
-                                .rounded_full()
-                                .cursor_pointer()
-                                .text_size(px(12.))
-                                .font_weight(FontWeight::MEDIUM)
-                                .text_color(rgb(ACCENT))
-                                .hover(|s| s.bg(rgb(ACTIVE_STEP)))
-                                .child("Reset all")
-                                .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
-                                    this.filters.clear();
+                                .text_size(px(13.))
+                                .font_weight(FontWeight::SEMIBOLD)
+                                .text_color(rgb(TEXT))
+                                .child("Filters & Aggregations"),
+                        )
+                        .when(self.filters.active_count() > 0, |d| {
+                            d.child(
+                                div()
+                                    .id("filters-reset-all")
+                                    .px(px(8.))
+                                    .py(px(2.))
+                                    .rounded_full()
+                                    .cursor_pointer()
+                                    .text_size(px(12.))
+                                    .font_weight(FontWeight::MEDIUM)
+                                    .text_color(rgb(ACCENT))
+                                    .hover(|s| s.bg(rgb(ACTIVE_STEP)))
+                                    .child("Reset all")
+                                    .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                                        this.filters.clear();
+                                        this.collapsed.clear();
+                                        this.collapsed_groups.clear();
+                                        this.jump_to_top();
+                                        cx.notify()
+                                    })),
+                            )
+                        }),
+                )
+                .child(section(
+                    "Completion",
+                    div().flex().flex_wrap().gap(px(6.)).children(
+                        DoneFilter::ALL
+                            .into_iter()
+                            .enumerate()
+                            .map(|(i, (val, label))| {
+                                pill(("f-done", i), label.into(), self.filters.done == val)
+                                    .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                                        this.filters.done = val;
+                                        this.collapsed.clear();
+                                        this.jump_to_top();
+                                        cx.notify()
+                                    }))
+                            }),
+                    ),
+                ))
+                .child(section(
+                    "Due date",
+                    div().flex().flex_wrap().gap(px(6.)).children(
+                        DueFilter::ALL
+                            .into_iter()
+                            .enumerate()
+                            .map(|(i, (val, label))| {
+                                pill(("f-due", i), label.into(), self.filters.due == val).on_click(
+                                    cx.listener(move |this, _: &ClickEvent, _, cx| {
+                                        this.filters.due = val;
+                                        this.collapsed.clear();
+                                        this.jump_to_top();
+                                        cx.notify()
+                                    }),
+                                )
+                            }),
+                    ),
+                ))
+                .child(section(
+                    "Quick filters",
+                    div()
+                        .flex()
+                        .flex_wrap()
+                        .gap(px(6.))
+                        .child(
+                            pill(
+                                ("f-quick", 0),
+                                "High priority".into(),
+                                self.filters.high_only,
+                            )
+                            .on_click(cx.listener(
+                                |this, _: &ClickEvent, _, cx| {
+                                    this.filters.high_only = !this.filters.high_only;
                                     this.collapsed.clear();
-                                    this.collapsed_groups.clear();
                                     this.jump_to_top();
                                     cx.notify()
-                                })),
+                                },
+                            )),
                         )
-                    }),
-            )
-            .child(section(
-                "Completion",
-                div().flex().flex_wrap().gap(px(6.)).children(
-                    DoneFilter::ALL.into_iter().enumerate().map(|(i, (val, label))| {
-                        pill(("f-done", i), label.into(), self.filters.done == val).on_click(
-                            cx.listener(move |this, _: &ClickEvent, _, cx| {
-                                this.filters.done = val;
-                                this.collapsed.clear();
-                                this.jump_to_top();
-                                cx.notify()
+                        .child(
+                            pill(
+                                ("f-quick", 1),
+                                "Unassigned".into(),
+                                self.filters.unassigned_only,
+                            )
+                            .on_click(cx.listener(
+                                |this, _: &ClickEvent, _, cx| {
+                                    this.filters.unassigned_only = !this.filters.unassigned_only;
+                                    if this.filters.unassigned_only {
+                                        this.assignee = None;
+                                    }
+                                    this.collapsed.clear();
+                                    this.jump_to_top();
+                                    cx.notify()
+                                },
+                            )),
+                        )
+                        .child(
+                            pill(
+                                ("f-quick", 2),
+                                "Summary stats".into(),
+                                self.filters.show_stats,
+                            )
+                            .on_click(cx.listener(
+                                |this, _: &ClickEvent, _, cx| {
+                                    this.filters.show_stats = !this.filters.show_stats;
+                                    cx.notify()
+                                },
+                            )),
+                        ),
+                ))
+                .child(section(
+                    "Logged time",
+                    div().flex().flex_wrap().gap(px(6.)).children(
+                        HoursFilter::ALL
+                            .into_iter()
+                            .enumerate()
+                            .map(|(i, (val, label))| {
+                                pill(("f-hours", i), label.into(), self.filters.hours == val)
+                                    .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                                        this.filters.hours = val;
+                                        this.collapsed.clear();
+                                        this.jump_to_top();
+                                        cx.notify()
+                                    }))
                             }),
-                        )
-                    }),
-                ),
-            ))
-            .child(section(
-                "Due date",
-                div().flex().flex_wrap().gap(px(6.)).children(
-                    DueFilter::ALL.into_iter().enumerate().map(|(i, (val, label))| {
-                        pill(("f-due", i), label.into(), self.filters.due == val).on_click(
-                            cx.listener(move |this, _: &ClickEvent, _, cx| {
-                                this.filters.due = val;
-                                this.collapsed.clear();
-                                this.jump_to_top();
-                                cx.notify()
-                            }),
-                        )
-                    }),
-                ),
-            ))
-            .child(section(
-                "Quick filters",
-                div()
-                    .flex()
-                    .flex_wrap()
-                    .gap(px(6.))
-                    .child(
-                        pill(("f-quick", 0), "High priority".into(), self.filters.high_only)
-                            .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
-                                this.filters.high_only = !this.filters.high_only;
-                                this.collapsed.clear();
-                                this.jump_to_top();
-                                cx.notify()
-                            })),
-                    )
-                    .child(
-                        pill(
-                            ("f-quick", 1),
-                            "Unassigned".into(),
-                            self.filters.unassigned_only,
-                        )
-                        .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
-                            this.filters.unassigned_only = !this.filters.unassigned_only;
-                            if this.filters.unassigned_only {
-                                this.assignee = None;
-                            }
-                            this.collapsed.clear();
-                            this.jump_to_top();
-                            cx.notify()
-                        })),
-                    )
-                    .child(
-                        pill(
-                            ("f-quick", 2),
-                            "Summary stats".into(),
-                            self.filters.show_stats,
-                        )
-                        .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
-                            this.filters.show_stats = !this.filters.show_stats;
-                            cx.notify()
-                        })),
                     ),
-            ))
-            .child(section(
-                "Logged time",
-                div().flex().flex_wrap().gap(px(6.)).children(
-                    HoursFilter::ALL.into_iter().enumerate().map(|(i, (val, label))| {
-                        pill(("f-hours", i), label.into(), self.filters.hours == val).on_click(
-                            cx.listener(move |this, _: &ClickEvent, _, cx| {
-                                this.filters.hours = val;
-                                this.collapsed.clear();
-                                this.jump_to_top();
-                                cx.notify()
+                ))
+                .child(section(
+                    "Hierarchy",
+                    div().flex().flex_wrap().gap(px(6.)).children(
+                        KindFilter::ALL
+                            .into_iter()
+                            .enumerate()
+                            .map(|(i, (val, label))| {
+                                pill(("f-kind", i), label.into(), self.filters.kind == val)
+                                    .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                                        this.filters.kind = val;
+                                        this.collapsed.clear();
+                                        this.jump_to_top();
+                                        cx.notify()
+                                    }))
                             }),
-                        )
-                    }),
-                ),
-            ))
-            .child(section(
-                "Hierarchy",
-                div().flex().flex_wrap().gap(px(6.)).children(
-                    KindFilter::ALL.into_iter().enumerate().map(|(i, (val, label))| {
-                        pill(("f-kind", i), label.into(), self.filters.kind == val).on_click(
-                            cx.listener(move |this, _: &ClickEvent, _, cx| {
-                                this.filters.kind = val;
-                                this.collapsed.clear();
-                                this.jump_to_top();
-                                cx.notify()
-                            }),
-                        )
-                    }),
-                ),
-            ));
+                    ),
+                ));
 
         if !all_tags.is_empty() {
             menu = menu.child(section(
@@ -755,30 +777,36 @@ impl TaskList {
             .child(section(
                 "Group by (aggregations)",
                 div().flex().flex_wrap().gap(px(6.)).children(
-                    GroupBy::ALL.into_iter().enumerate().map(|(i, (val, label))| {
-                        pill(("f-group", i), label.into(), self.filters.group == val).on_click(
-                            cx.listener(move |this, _: &ClickEvent, _, cx| {
-                                this.filters.group = val;
-                                this.collapsed_groups.clear();
-                                this.jump_to_top();
-                                cx.notify()
-                            }),
-                        )
-                    }),
+                    GroupBy::ALL
+                        .into_iter()
+                        .enumerate()
+                        .map(|(i, (val, label))| {
+                            pill(("f-group", i), label.into(), self.filters.group == val).on_click(
+                                cx.listener(move |this, _: &ClickEvent, _, cx| {
+                                    this.filters.group = val;
+                                    this.collapsed_groups.clear();
+                                    this.jump_to_top();
+                                    cx.notify()
+                                }),
+                            )
+                        }),
                 ),
             ))
             .child(section(
                 "Sort by",
                 div().flex().flex_wrap().gap(px(6.)).children(
-                    SortBy::ALL.into_iter().enumerate().map(|(i, (val, label))| {
-                        pill(("f-sort", i), label.into(), self.filters.sort == val).on_click(
-                            cx.listener(move |this, _: &ClickEvent, _, cx| {
-                                this.filters.sort = val;
-                                this.jump_to_top();
-                                cx.notify()
-                            }),
-                        )
-                    }),
+                    SortBy::ALL
+                        .into_iter()
+                        .enumerate()
+                        .map(|(i, (val, label))| {
+                            pill(("f-sort", i), label.into(), self.filters.sort == val).on_click(
+                                cx.listener(move |this, _: &ClickEvent, _, cx| {
+                                    this.filters.sort = val;
+                                    this.jump_to_top();
+                                    cx.notify()
+                                }),
+                            )
+                        }),
                 ),
             ))
     }
@@ -860,7 +888,12 @@ impl TaskList {
         if self.filters.active_count() == 0 {
             return None;
         }
-        let mut row = div().flex().flex_wrap().items_center().gap(px(6.)).pt(px(2.));
+        let mut row = div()
+            .flex()
+            .flex_wrap()
+            .items_center()
+            .gap(px(6.))
+            .pt(px(2.));
         let badge = |id: (&'static str, usize), text: String| {
             div()
                 .id(id)
@@ -882,26 +915,22 @@ impl TaskList {
                 .child(div().text_color(rgb(MUTED)).child("×"))
         };
         if self.filters.done != DoneFilter::All {
-            row = row.child(
-                badge(("af", 0), self.filters.done.label().into()).on_click(cx.listener(
-                    |this, _: &ClickEvent, _, cx| {
-                        this.filters.done = DoneFilter::All;
-                        this.jump_to_top();
-                        cx.notify()
-                    },
-                )),
-            );
+            row = row.child(badge(("af", 0), self.filters.done.label().into()).on_click(
+                cx.listener(|this, _: &ClickEvent, _, cx| {
+                    this.filters.done = DoneFilter::All;
+                    this.jump_to_top();
+                    cx.notify()
+                }),
+            ));
         }
         if self.filters.due != DueFilter::Any {
-            row = row.child(
-                badge(("af", 1), self.filters.due.label().into()).on_click(cx.listener(
-                    |this, _: &ClickEvent, _, cx| {
-                        this.filters.due = DueFilter::Any;
-                        this.jump_to_top();
-                        cx.notify()
-                    },
-                )),
-            );
+            row = row.child(badge(("af", 1), self.filters.due.label().into()).on_click(
+                cx.listener(|this, _: &ClickEvent, _, cx| {
+                    this.filters.due = DueFilter::Any;
+                    this.jump_to_top();
+                    cx.notify()
+                }),
+            ));
         }
         if self.filters.high_only {
             row = row.child(
@@ -915,15 +944,13 @@ impl TaskList {
             );
         }
         if self.filters.unassigned_only {
-            row = row.child(
-                badge(("af", 3), "Unassigned".into()).on_click(cx.listener(
-                    |this, _: &ClickEvent, _, cx| {
-                        this.filters.unassigned_only = false;
-                        this.jump_to_top();
-                        cx.notify()
-                    },
-                )),
-            );
+            row = row.child(badge(("af", 3), "Unassigned".into()).on_click(cx.listener(
+                |this, _: &ClickEvent, _, cx| {
+                    this.filters.unassigned_only = false;
+                    this.jump_to_top();
+                    cx.notify()
+                },
+            )));
         }
         if self.filters.hours != HoursFilter::Any {
             row = row.child(
@@ -937,15 +964,13 @@ impl TaskList {
             );
         }
         if self.filters.kind != KindFilter::All {
-            row = row.child(
-                badge(("af", 5), self.filters.kind.label().into()).on_click(cx.listener(
-                    |this, _: &ClickEvent, _, cx| {
-                        this.filters.kind = KindFilter::All;
-                        this.jump_to_top();
-                        cx.notify()
-                    },
-                )),
-            );
+            row = row.child(badge(("af", 5), self.filters.kind.label().into()).on_click(
+                cx.listener(|this, _: &ClickEvent, _, cx| {
+                    this.filters.kind = KindFilter::All;
+                    this.jump_to_top();
+                    cx.notify()
+                }),
+            ));
         }
         let mut tags: Vec<String> = self.filters.tags.iter().cloned().collect();
         tags.sort();
@@ -1362,7 +1387,11 @@ impl TaskList {
                                 cx.notify()
                             }))
                             .child(icon(
-                                if *open { "chevron-down" } else { "chevron-right" },
+                                if *open {
+                                    "chevron-down"
+                                } else {
+                                    "chevron-right"
+                                },
                                 14.,
                                 MUTED,
                             ))
@@ -1414,9 +1443,7 @@ impl TaskList {
                                                 .child(format!("{} overdue", agg.overdue)),
                                         )
                                     })
-                                    .when(agg.high > 0, |d| {
-                                        d.child(format!("{} high", agg.high))
-                                    })
+                                    .when(agg.high > 0, |d| d.child(format!("{} high", agg.high)))
                                     .when(agg.hours > 0., |d| {
                                         d.child(
                                             div()

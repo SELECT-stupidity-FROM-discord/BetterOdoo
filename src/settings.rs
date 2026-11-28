@@ -162,7 +162,10 @@ mod tests {
         let webp = b"RIFF\x24\x00\x00\x00WEBP";
         let gif = b"GIF89a\x01\x00";
 
-        assert_eq!(detect_image_format(&png, Some("jpg")), Some(ImageFormat::Png));
+        assert_eq!(
+            detect_image_format(&png, Some("jpg")),
+            Some(ImageFormat::Png)
+        );
         assert_eq!(detect_image_format(&jpg, None), Some(ImageFormat::Jpeg));
         assert_eq!(detect_image_format(webp, None), Some(ImageFormat::Webp));
         assert_eq!(detect_image_format(gif, None), Some(ImageFormat::Gif));

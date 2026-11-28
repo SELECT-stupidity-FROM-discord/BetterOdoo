@@ -71,9 +71,8 @@ impl TimesheetsView {
         let work_name = input("What did you work on?", cx);
         let work_hours = input("1h 30m", cx);
         let root_for_cal = root.clone();
-        let work_day = cx.new(|cx| {
-            DatePicker::new("ts-day", "Date", "Today", today, root_for_cal, window, cx)
-        });
+        let work_day = cx
+            .new(|cx| DatePicker::new("ts-day", "Date", "Today", today, root_for_cal, window, cx));
         cx.subscribe_in(&filter, window, Self::on_filter).detach();
         cx.subscribe_in(&task_query, window, Self::on_task_query)
             .detach();
@@ -280,7 +279,12 @@ impl TimesheetsView {
                     .is_some_and(|(_, name)| name.to_lowercase().contains(q)))
     }
 
-    fn person_menu(&self, entries: &[Timesheet], all_people: &[String], cx: &mut Context<Self>) -> Floating {
+    fn person_menu(
+        &self,
+        entries: &[Timesheet],
+        all_people: &[String],
+        cx: &mut Context<Self>,
+    ) -> Floating {
         let mut counts: HashMap<&str, usize> = HashMap::new();
         for t in entries {
             *counts.entry(t.user.as_str()).or_default() += 1;
@@ -549,16 +553,14 @@ impl TimesheetsView {
                         d.child(div().text_size(px(12.)).text_color(rgb(DANGER)).child(msg))
                     })
                     .child(div().flex_1())
-                    .child(
-                        Button::new("ts-cancel-log", "Cancel").on_click(cx.listener(
-                            |this, _: &ClickEvent, _, cx| {
-                                this.composing = false;
-                                this.task_menu = false;
-                                this.notice = None;
-                                cx.notify()
-                            },
-                        )),
-                    )
+                    .child(Button::new("ts-cancel-log", "Cancel").on_click(cx.listener(
+                        |this, _: &ClickEvent, _, cx| {
+                            this.composing = false;
+                            this.task_menu = false;
+                            this.notice = None;
+                            cx.notify()
+                        },
+                    )))
                     .child(
                         Button::new("ts-submit-log", "Log time")
                             .icon("plus")
@@ -638,7 +640,9 @@ impl TimesheetsView {
                                 cx.notify()
                             })),
                     )
-                    .when(project_open, |d| d.child(self.project_menu(all_entries, cx))),
+                    .when(project_open, |d| {
+                        d.child(self.project_menu(all_entries, cx))
+                    }),
             );
 
         div()
@@ -695,13 +699,11 @@ impl Render for TimesheetsView {
                     .items_start()
                     .gap(px(10.))
                     .child(div().text_color(rgb(DANGER)).child(err.clone()))
-                    .child(
-                        Button::new("ts-retry", "Try again").on_click(cx.listener(
-                            |this, _: &ClickEvent, _, cx| {
-                                this.store.update(cx, |s, cx| s.reload_timesheets(cx));
-                            },
-                        )),
-                    )
+                    .child(Button::new("ts-retry", "Try again").on_click(cx.listener(
+                        |this, _: &ClickEvent, _, cx| {
+                            this.store.update(cx, |s, cx| s.reload_timesheets(cx));
+                        },
+                    )))
                     .into_any_element(),
             ),
             Load::Ready(entries) => {
@@ -926,13 +928,11 @@ impl Render for TimesheetsView {
                             .items_center()
                             .gap(px(8.))
                             .pt(px(6.))
-                            .child(
-                                Button::new("ts-refresh", "Refresh").on_click(cx.listener(
-                                    |this, _: &ClickEvent, _, cx| {
-                                        this.store.update(cx, |s, cx| s.reload_timesheets(cx));
-                                    },
-                                )),
-                            )
+                            .child(Button::new("ts-refresh", "Refresh").on_click(cx.listener(
+                                |this, _: &ClickEvent, _, cx| {
+                                    this.store.update(cx, |s, cx| s.reload_timesheets(cx));
+                                },
+                            )))
                             .child(
                                 Button::new("ts-new", "Log time")
                                     .icon("plus")

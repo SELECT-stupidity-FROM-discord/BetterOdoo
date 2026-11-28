@@ -134,7 +134,12 @@ fn parse_month_word(word: &str) -> Option<i64> {
         .map(|i| i as i64 + 1)
 }
 
-pub fn parse_partial(input: &str, today: i64, view_year: i64, view_month: i64) -> Option<PartialDate> {
+pub fn parse_partial(
+    input: &str,
+    today: i64,
+    view_year: i64,
+    view_month: i64,
+) -> Option<PartialDate> {
     let raw = input.trim();
     if raw.is_empty() {
         return None;
@@ -175,7 +180,11 @@ pub fn parse_partial(input: &str, today: i64, view_year: i64, view_month: i64) -
         .split(['-', '/', '.'])
         .filter(|s| !s.is_empty())
         .collect();
-    if !num_parts.is_empty() && num_parts.iter().all(|p| p.chars().all(|c| c.is_ascii_digit())) {
+    if !num_parts.is_empty()
+        && num_parts
+            .iter()
+            .all(|p| p.chars().all(|c| c.is_ascii_digit()))
+    {
         let first = num_parts[0];
         if first.len() == 4 {
             let year = first.parse::<i64>().ok()?;
