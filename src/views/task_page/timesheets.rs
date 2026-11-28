@@ -1,5 +1,5 @@
 use super::ChildEvent;
-use crate::components::{Button, Variant, icon};
+use crate::components::{Button, DatePicker, Variant, icon};
 use crate::date;
 use crate::format::{hours, parse_hours};
 use crate::input::{InputEvent, TextInput};
@@ -18,7 +18,7 @@ pub struct TimesheetTab {
     task: i64,
     name: Entity<TextInput>,
     hours: Entity<TextInput>,
-    day: Entity<TextInput>,
+    day: Entity<DatePicker>,
 }
 
 impl EventEmitter<ChildEvent> for TimesheetTab {}
@@ -31,15 +31,27 @@ impl TimesheetTab {
         cx: &mut Context<Self>,
     ) -> Self {
         cx.observe(&store, |_, _, cx| cx.notify()).detach();
+        let today = store.read(cx).today;
         let input = |placeholder: &'static str, cx: &mut Context<Self>| {
             cx.new(|cx| TextInput::new(placeholder, cx))
         };
-        let (name, hours, day) = (
+        let (name, hours) = (
             input("What did you work on?", cx),
             input("1h 30m", cx),
-            input("Today", cx),
         );
-        for i in [&name, &hours, &day] {
+        let root_for_cal = root.clone();
+        let day = cx.new(|cx| {
+            DatePicker::new(
+                "task-ts-day",
+                "Date",
+                "Today",
+                today,
+                root_for_cal,
+                window,
+                cx,
+            )
+        });
+        for i in [&name, &hours] {
             cx.subscribe_in(i, window, Self::on_input).detach();
         }
         Self {
@@ -83,15 +95,12 @@ impl TimesheetTab {
         let Some(h) = parse_hours(self.hours.read(cx).text()).filter(|h| *h > 0.) else {
             return self.notice("enter the hours, like 1.5 or 1h 30m", cx);
         };
-        let day = self.day.read(cx).text().trim().to_string();
-        let day = if day.is_empty() {
-            date::iso(today)
-        } else {
-            day
-        };
-        if !date::is_valid(&day) {
-            return self.notice("write the date as YYYY-MM-DD", cx);
-        }
+        let day = self
+            .day
+            .read(cx)
+            .value()
+            .map(String::from)
+            .unwrap_or_else(|| date::iso(today));
         let name = self.name.read(cx).text().trim().to_string();
         if name.is_empty() {
             return self.notice("describe the work", cx);
@@ -159,7 +168,7 @@ impl TimesheetTab {
                     .items_center()
                     .gap(px(8.))
                     .child(pill("clock", 120., &self.hours))
-                    .child(pill("calendar", 150., &self.day))
+                    .child(self.day.clone())
                     .child(div().flex_1())
                     .child(
                         Button::new("log-time", "Log time")

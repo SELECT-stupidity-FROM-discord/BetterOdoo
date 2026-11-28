@@ -13,6 +13,7 @@ struct Tree<'a> {
     nodes: &'a [(i64, Option<i64>)],
     own: &'a [bool],
     expanded: &'a HashSet<i64>,
+    collapsed: &'a HashSet<i64>,
     kids: Vec<Vec<usize>>,
     has: Vec<bool>,
 }
@@ -37,7 +38,13 @@ impl Tree<'_> {
             .filter(|&k| self.has[k])
             .collect();
         let forced = !self.own[i];
-        let open = !shown.is_empty() && (forced || self.expanded.contains(&self.nodes[i].0));
+        let id = self.nodes[i].0;
+        let open = !shown.is_empty()
+            && if forced {
+                !self.collapsed.contains(&id)
+            } else {
+                self.expanded.contains(&id)
+            };
         out.push(Row {
             idx: i,
             depth,
@@ -53,7 +60,12 @@ impl Tree<'_> {
     }
 }
 
-pub fn rows(nodes: &[(i64, Option<i64>)], own: &[bool], expanded: &HashSet<i64>) -> Vec<Row> {
+pub fn rows(
+    nodes: &[(i64, Option<i64>)],
+    own: &[bool],
+    expanded: &HashSet<i64>,
+    collapsed: &HashSet<i64>,
+) -> Vec<Row> {
     let at: HashMap<i64, usize> = nodes.iter().enumerate().map(|(i, n)| (n.0, i)).collect();
     let mut kids = vec![Vec::new(); nodes.len()];
     let mut roots = Vec::new();
@@ -67,6 +79,7 @@ pub fn rows(nodes: &[(i64, Option<i64>)], own: &[bool], expanded: &HashSet<i64>)
         nodes,
         own,
         expanded,
+        collapsed,
         kids,
         has: vec![false; nodes.len()],
     };
@@ -100,12 +113,12 @@ mod tests {
         let all = [true; 5];
         let none = HashSet::new();
         assert_eq!(
-            shape(&rows(&nodes, &all, &none)),
+            shape(&rows(&nodes, &all, &none, &none)),
             [(0, 0, false), (3, 0, false), (4, 0, false)]
         );
         let open: HashSet<i64> = [1, 2].into();
         assert_eq!(
-            shape(&rows(&nodes, &all, &open)),
+            shape(&rows(&nodes, &all, &open, &none)),
             [
                 (0, 0, true),
                 (1, 1, true),
@@ -120,8 +133,14 @@ mod tests {
     fn filtered_children_pull_in_their_parents() {
         let nodes = [(1, None), (2, Some(1)), (3, Some(1))];
         let own = [false, false, true];
-        let r = rows(&nodes, &own, &HashSet::new());
+        let empty = HashSet::new();
+        let r = rows(&nodes, &own, &empty, &empty);
         assert_eq!(shape(&r), [(0, 0, true), (2, 1, false)]);
         assert!(r[0].forced && r[0].kids == 1);
+
+        let collapsed: HashSet<i64> = [1].into();
+        let r2 = rows(&nodes, &own, &empty, &collapsed);
+        assert_eq!(shape(&r2), [(0, 0, false)]);
+        assert!(r2[0].forced && r2[0].kids == 1);
     }
 }

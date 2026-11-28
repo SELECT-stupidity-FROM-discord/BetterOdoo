@@ -14,14 +14,75 @@ pub fn hours(h: f64) -> String {
 
 pub fn stage_tone(stage: &str) -> Tone {
     let s = stage.to_lowercase();
-    if s.contains("progress") {
-        BLUE
-    } else if s.contains("review") || s.contains("test") {
-        PURPLE
-    } else if s.contains("done") || s.contains("complet") {
-        GREEN
+    if s.contains("cancel")
+        || s.contains("block")
+        || s.contains("reject")
+        || s.contains("fail")
+    {
+        STAGE_RED
+    } else if s.contains("done")
+        || s.contains("complet")
+        || s.contains("clos")
+        || s.contains("resolv")
+        || s.contains("approv")
+    {
+        STAGE_GREEN
+    } else if s.contains("prod") || s.contains("deploy") || s.contains("live") || s.contains("releas")
+    {
+        STAGE_CYAN
+    } else if s.contains("uat")
+        || s.contains("test")
+        || s.contains("review")
+        || s.contains("qa")
+        || s.contains("verif")
+    {
+        STAGE_PURPLE
+    } else if s.contains("progress") || s.contains("doing") || s.contains("active") {
+        STAGE_BLUE
+    } else if s.contains("dev") || s.contains("build") || s.contains("implement") {
+        STAGE_AMBER
+    } else if s.contains("intern") || s.contains("stag") || s.contains("design") {
+        STAGE_PINK
+    } else if s.contains("wait") || s.contains("hold") || s.contains("pend") || s.contains("pause")
+    {
+        STAGE_ORANGE
+    } else if s.contains("new")
+        || s.contains("backlog")
+        || s.contains("inbox")
+        || s.contains("draft")
+        || s.contains("todo")
+        || s.contains("to do")
+        || s == "—"
+    {
+        STAGE_GRAY
     } else {
-        GRAY
+        const FALLBACK: [Tone; 6] = [
+            STAGE_BLUE,
+            STAGE_AMBER,
+            STAGE_PURPLE,
+            STAGE_CYAN,
+            STAGE_PINK,
+            STAGE_ORANGE,
+        ];
+        let hash = s
+            .bytes()
+            .fold(0usize, |acc, b| acc.wrapping_mul(31).wrapping_add(b as usize));
+        FALLBACK[hash % FALLBACK.len()]
+    }
+}
+
+pub fn stage_dot(stage: &str) -> u32 {
+    match stage_tone(stage).fg {
+        0x5f5e5b => 0x9b9a97, // warm stone
+        0x2d688a => 0x3d84b0, // slate blue
+        0x8f5b1e => 0xc28334, // warm ochre
+        0x6f4d8e => 0x8b62b0, // muted plum
+        0x2f6f6a => 0x3f8f88, // eucalyptus teal
+        0x3a6f4f => 0x4a8f65, // sage green
+        0x9e3f3d => 0xc45452, // muted crimson
+        0x8f456b => 0xb8618c, // dusty rose
+        0x9a521b => 0xc97232, // terracotta
+        fg => fg,
     }
 }
 
@@ -94,5 +155,22 @@ mod tests {
         assert_eq!(hours_text(1.5), "1.5");
         assert_eq!(hours_text(3.), "3");
         assert_eq!(hours_text(0.), "");
+    }
+
+    #[test]
+    fn stage_tones_are_distinct() {
+        let stages = [
+            "Development",
+            "Production",
+            "Completed",
+            "UAT/Testing",
+            "New",
+            "In Progress",
+            "Cancelled",
+            "Internal",
+        ];
+        let colors: std::collections::HashSet<u32> =
+            stages.iter().map(|s| stage_tone(s).fg).collect();
+        assert_eq!(colors.len(), stages.len());
     }
 }

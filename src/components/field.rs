@@ -13,7 +13,7 @@ impl Field {
     pub fn new(input: &Entity<TextInput>) -> Self {
         Self {
             input: input.clone(),
-            height: 30.,
+            height: 34.,
         }
     }
 
@@ -29,12 +29,20 @@ impl RenderOnce for Field {
         div()
             .flex()
             .items_center()
-            .px(px(10.))
-            .min_h(px(self.height))
-            .rounded(px(6.))
+            .px(px(11.))
+            .h(px(self.height))
+            .rounded(px(8.))
             .border_1()
-            .border_color(rgb(if focused { MUTED } else { BORDER }))
-            .bg(rgb(PAGE))
-            .child(self.input)
+            .border_color(rgb(if focused { ACCENT } else { BORDER }))
+            .bg(rgb(if focused { PAGE } else { SIDEBAR }))
+            .when(!focused, |d| d.hover(|s| s.border_color(rgb(BORDER_STRONG))))
+            .text_size(px(13.))
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .overflow_hidden()
+                    .child(self.input),
+            )
     }
 }

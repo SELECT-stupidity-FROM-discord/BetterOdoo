@@ -1,5 +1,10 @@
 pub mod connect;
+pub mod employees;
 pub mod settings;
 pub mod sidebar;
+pub mod task_filters;
 pub mod task_list;
 pub mod task_page;
+pub mod timesheets;
+pub mod titlebar;
+pub mod todos;

@@ -1,6 +1,6 @@
 use crate::date;
 use crate::html::{self, Block};
-use crate::odoo::{Message, Odoo, Stage, Task, Timesheet, WorkItem};
+use crate::odoo::{Employee, Message, Odoo, Stage, Task, Timesheet, WorkItem};
 use gpui::{Context, EventEmitter, SharedString};
 use std::{collections::HashMap, sync::Arc};
 
@@ -30,6 +30,9 @@ pub struct Store {
     pub tasks: Vec<Task>,
     stages: HashMap<i64, Vec<Stage>>,
     details: HashMap<i64, Load<Detail>>,
+    timesheets: Option<Load<Vec<Timesheet>>>,
+    todos: Option<Load<Vec<Task>>>,
+    employees: Option<Load<Vec<Employee>>>,
 }
 
 impl EventEmitter<StoreEvent> for Store {}
@@ -49,6 +52,9 @@ impl Store {
             tasks: Vec::new(),
             stages: HashMap::new(),
             details: HashMap::new(),
+            timesheets: None,
+            todos: None,
+            employees: None,
         }
     }
 
@@ -64,6 +70,9 @@ impl Store {
         self.tasks.clear();
         self.stages.clear();
         self.details.clear();
+        self.timesheets = None;
+        self.todos = None;
+        self.employees = None;
         cx.notify();
     }
 
@@ -72,7 +81,12 @@ impl Store {
     }
 
     pub fn task(&self, id: i64) -> Option<&Task> {
-        self.tasks.iter().find(|t| t.id == id)
+        self.tasks.iter().find(|t| t.id == id).or_else(|| {
+            let Some(Load::Ready(todos)) = &self.todos else {
+                return None;
+            };
+            todos.iter().find(|t| t.id == id)
+        })
     }
 
     pub fn children_of(&self, id: i64) -> Vec<Task> {
@@ -96,8 +110,27 @@ impl Store {
         p.into_iter().map(|(n, _)| n.to_string()).collect()
     }
 
+    pub fn assigners(&self) -> Vec<(String, usize)> {
+        let mut counts: HashMap<&str, usize> = HashMap::new();
+        for t in &self.tasks {
+            if let Some(who) = t.creator.as_deref()
+                && t.assigned_by(who)
+            {
+                *counts.entry(who).or_default() += 1;
+            }
+        }
+        let mut list: Vec<(&str, usize)> = counts.into_iter().collect();
+        list.sort_by_key(|&(n, c)| (n != "Me", std::cmp::Reverse(c), n.to_lowercase()));
+        list.into_iter().map(|(n, c)| (n.to_string(), c)).collect()
+    }
+
     pub fn projects(&self) -> Vec<String> {
-        let mut p: Vec<String> = self.tasks.iter().map(|t| t.project.clone()).collect();
+        let mut p: Vec<String> = self
+            .tasks
+            .iter()
+            .filter(|t| t.project_id.is_some())
+            .map(|t| t.project.clone())
+            .collect();
         p.sort();
         p.dedup();
         p
@@ -111,6 +144,149 @@ impl Store {
 
     pub fn detail(&self, id: i64) -> &Load<Detail> {
         self.details.get(&id).unwrap_or(&Load::Loading)
+    }
+
+    pub fn timesheets(&self) -> &Load<Vec<Timesheet>> {
+        self.timesheets.as_ref().unwrap_or(&Load::Loading)
+    }
+
+    pub fn ensure_timesheets(&mut self, cx: &mut Context<Self>) {
+        if self.timesheets.is_none() {
+            self.reload_timesheets(cx);
+        }
+    }
+
+    pub fn reload_timesheets(&mut self, cx: &mut Context<Self>) {
+        let Some(o) = self.odoo.clone() else { return };
+        if self.timesheets.is_none() {
+            self.timesheets = Some(Load::Loading);
+            cx.notify();
+        }
+        cx.spawn(async move |this, cx| {
+            let r = cx
+                .background_executor()
+                .spawn(async move { o.all_timesheets() })
+                .await;
+            this.update(cx, |this, cx| {
+                this.timesheets = Some(match r {
+                    Ok(list) => Load::Ready(list),
+                    Err(e) => Load::Failed(e.to_string().into()),
+                });
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    pub fn todos(&self) -> &Load<Vec<Task>> {
+        self.todos.as_ref().unwrap_or(&Load::Loading)
+    }
+
+    pub fn ensure_todos(&mut self, cx: &mut Context<Self>) {
+        if self.todos.is_none() {
+            self.reload_todos(cx);
+        }
+    }
+
+    pub fn reload_todos(&mut self, cx: &mut Context<Self>) {
+        let Some(o) = self.odoo.clone() else { return };
+        if self.todos.is_none() {
+            self.todos = Some(Load::Loading);
+            cx.notify();
+        }
+        cx.spawn(async move |this, cx| {
+            let r = cx
+                .background_executor()
+                .spawn(async move { o.todos() })
+                .await;
+            this.update(cx, |this, cx| {
+                this.todos = Some(match r {
+                    Ok(list) => Load::Ready(list),
+                    Err(e) => Load::Failed(e.to_string().into()),
+                });
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    pub fn create_todo(
+        &mut self,
+        name: String,
+        deadline: Option<String>,
+        cx: &mut Context<Self>,
+    ) -> gpui::Task<Result<(), SharedString>> {
+        let Some(o) = self.odoo.clone() else {
+            return gpui::Task::ready(Err("Not connected".into()));
+        };
+        cx.spawn(async move |this, cx| {
+            let r = cx
+                .background_executor()
+                .spawn(async move { o.create_todo(&name, deadline.as_deref()) })
+                .await
+                .map_err(|e| SharedString::from(e.to_string()));
+            this.update(cx, |this, cx| {
+                if r.is_ok() {
+                    this.reload_todos(cx);
+                    this.reload(cx);
+                }
+            })
+            .ok();
+            r
+        })
+    }
+
+    pub fn toggle_priority(&mut self, id: i64, cx: &mut Context<Self>) {
+        let Some(current) = self.task(id).map(|t| t.priority_high) else {
+            return;
+        };
+        let high = !current;
+        if let Some(t) = self.tasks.iter_mut().find(|t| t.id == id) {
+            t.priority_high = high;
+        }
+        if let Some(Load::Ready(todos)) = &mut self.todos
+            && let Some(t) = todos.iter_mut().find(|t| t.id == id)
+        {
+            t.priority_high = high;
+        }
+        self.write(id, "Couldn’t update priority", cx, move |o| {
+            o.set_priority(id, high)
+        });
+    }
+
+    pub fn employees(&self) -> &Load<Vec<Employee>> {
+        self.employees.as_ref().unwrap_or(&Load::Loading)
+    }
+
+    pub fn ensure_employees(&mut self, cx: &mut Context<Self>) {
+        if self.employees.is_none() {
+            self.reload_employees(cx);
+        }
+    }
+
+    pub fn reload_employees(&mut self, cx: &mut Context<Self>) {
+        let Some(o) = self.odoo.clone() else { return };
+        if self.employees.is_none() {
+            self.employees = Some(Load::Loading);
+            cx.notify();
+        }
+        cx.spawn(async move |this, cx| {
+            let r = cx
+                .background_executor()
+                .spawn(async move { o.employees() })
+                .await;
+            this.update(cx, |this, cx| {
+                this.employees = Some(match r {
+                    Ok(list) => Load::Ready(list),
+                    Err(e) => Load::Failed(e.to_string().into()),
+                });
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
     }
 
     pub fn reload(&mut self, cx: &mut Context<Self>) {
@@ -130,6 +306,12 @@ impl Store {
                         this.tasks = tasks;
                         this.today = date::today();
                         this.status = "Synced just now".into();
+                        if this.timesheets.is_some() {
+                            this.reload_timesheets(cx);
+                        }
+                        if this.todos.is_some() {
+                            this.reload_todos(cx);
+                        }
                     }
                     Err(e) => this.status = e.to_string().into(),
                 }
@@ -141,11 +323,15 @@ impl Store {
     }
 
     pub fn ensure_detail(&mut self, id: i64, cx: &mut Context<Self>) {
-        let Some(o) = self.odoo.clone() else { return };
         if self.details.contains_key(&id) {
             return;
         }
         self.details.insert(id, Load::Loading);
+        self.refresh_detail(id, cx);
+    }
+
+    pub fn refresh_detail(&mut self, id: i64, cx: &mut Context<Self>) {
+        let Some(o) = self.odoo.clone() else { return };
         cx.spawn(async move |this, cx| {
             let r = cx
                 .background_executor()
@@ -179,6 +365,27 @@ impl Store {
         .detach();
     }
 
+    pub fn refresh_messages(&mut self, id: i64, cx: &mut Context<Self>) {
+        let Some(o) = self.odoo.clone() else { return };
+        if !self.details.contains_key(&id) {
+            return;
+        }
+        cx.spawn(async move |this, cx| {
+            let r = cx
+                .background_executor()
+                .spawn(async move { o.messages(id).map_err(|e| e.to_string()) })
+                .await;
+            this.update(cx, |this, cx| {
+                if let Some(Load::Ready(d)) = this.details.get_mut(&id) {
+                    d.messages = r;
+                    cx.notify();
+                }
+            })
+            .ok();
+        })
+        .detach();
+    }
+
     pub fn ensure_stages(&mut self, project: Option<i64>, cx: &mut Context<Self>) {
         let (Some(o), Some(project)) = (self.odoo.clone(), project) else {
             return;
@@ -205,16 +412,24 @@ impl Store {
 
     fn write(
         &mut self,
+        id: i64,
         what: &'static str,
         cx: &mut Context<Self>,
         job: impl FnOnce(Arc<Odoo>) -> anyhow::Result<()> + Send + 'static,
     ) {
         let Some(o) = self.odoo.clone() else { return };
+        let parent = self.task(id).and_then(|t| t.parent.as_ref().map(|p| p.0));
         cx.notify();
         cx.spawn(async move |this, cx| {
             let r = cx.background_executor().spawn(async move { job(o) }).await;
-            this.update(cx, |this, cx| {
-                if let Err(e) = r {
+            this.update(cx, |this, cx| match r {
+                Ok(()) => {
+                    this.refresh_messages(id, cx);
+                    if let Some(pid) = parent {
+                        this.refresh_messages(pid, cx);
+                    }
+                }
+                Err(e) => {
                     cx.emit(StoreEvent::Failed(format!("{what}: {e}").into()));
                     this.reload(cx);
                 }
@@ -230,7 +445,7 @@ impl Store {
             t.stage_id = Some(stage.id);
             t.done = stage.fold || closed(&t.state);
         }
-        self.write("Couldn’t change the status", cx, move |o| {
+        self.write(id, "Couldn’t change the status", cx, move |o| {
             o.set_stage(id, stage.id)
         });
     }
@@ -247,6 +462,16 @@ impl Store {
         let Some(o) = self.odoo.clone() else { return };
         if let Some(t) = self.tasks.iter_mut().find(|t| t.id == id) {
             patch(t);
+            let updated = t.clone();
+            if let Some(Load::Ready(todos)) = &mut self.todos
+                && let Some(todo) = todos.iter_mut().find(|t| t.id == id)
+            {
+                *todo = updated;
+            }
+        } else if let Some(Load::Ready(todos)) = &mut self.todos
+            && let Some(todo) = todos.iter_mut().find(|t| t.id == id)
+        {
+            patch(todo);
         }
         cx.notify();
         cx.spawn(async move |this, cx| {
@@ -255,8 +480,9 @@ impl Store {
                 .spawn(async move { o.set_fields(id, vals) })
                 .await;
             this.update(cx, |this, cx| {
-                if let Err(e) = &r {
-                    cx.emit(StoreEvent::Failed(format!("{what}: {e}").into()));
+                match &r {
+                    Ok(()) => this.refresh_messages(id, cx),
+                    Err(e) => cx.emit(StoreEvent::Failed(format!("{what}: {e}").into())),
                 }
                 if r.is_err() || reload {
                     this.reload(cx);
@@ -283,13 +509,22 @@ impl Store {
     }
 
     pub fn toggle_done(&mut self, id: i64, cx: &mut Context<Self>) {
-        let Some(t) = self.tasks.iter_mut().find(|t| t.id == id) else {
+        let Some(current) = self.task(id).map(|t| t.done) else {
             return;
         };
-        let done = !t.done;
-        t.done = done;
-        t.state = if done { "1_done" } else { "01_in_progress" }.into();
-        self.write("Couldn’t update the sub-task", cx, move |o| {
+        let done = !current;
+        let state = if done { "1_done" } else { "01_in_progress" };
+        if let Some(t) = self.tasks.iter_mut().find(|t| t.id == id) {
+            t.done = done;
+            t.state = state.into();
+        }
+        if let Some(Load::Ready(todos)) = &mut self.todos
+            && let Some(t) = todos.iter_mut().find(|t| t.id == id)
+        {
+            t.done = done;
+            t.state = state.into();
+        }
+        self.write(id, "Couldn’t update the task", cx, move |o| {
             o.set_done(id, done)
         });
     }
@@ -313,7 +548,7 @@ impl Store {
                 t.sequence = (i as i64 + 1) * 10;
             }
         }
-        self.write("Couldn’t save the new order", cx, move |o| {
+        self.write(parent, "Couldn’t save the new order", cx, move |o| {
             o.resequence(&ids)
         });
     }
@@ -369,9 +604,11 @@ impl Store {
                 .map(|w| w.map(SharedString::from));
             this.update(cx, |this, cx| {
                 if let Ok(warning) = &r {
-                    this.details.remove(&id);
-                    this.ensure_detail(id, cx);
+                    this.refresh_detail(id, cx);
                     this.reload(cx);
+                    if this.timesheets.is_some() {
+                        this.reload_timesheets(cx);
+                    }
                     if let Some(w) = warning {
                         cx.emit(StoreEvent::Failed(w.clone()));
                     }

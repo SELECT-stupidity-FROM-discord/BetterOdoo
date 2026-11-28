@@ -1,3 +1,4 @@
+use super::icon;
 use crate::scale::px;
 use crate::theme::*;
 use gpui::{
@@ -11,6 +12,7 @@ pub struct Chip {
     label: SharedString,
     selected: bool,
     open: bool,
+    dropdown: bool,
     on_click: Option<super::OnClick>,
     on_press: Option<super::OnPress>,
 }
@@ -22,6 +24,7 @@ impl Chip {
             label: label.into(),
             selected: false,
             open: false,
+            dropdown: false,
             on_click: None,
             on_press: None,
         }
@@ -34,6 +37,11 @@ impl Chip {
 
     pub fn open(mut self, open: bool) -> Self {
         self.open = open;
+        self
+    }
+
+    pub fn dropdown(mut self) -> Self {
+        self.dropdown = true;
         self
     }
 
@@ -56,6 +64,9 @@ impl RenderOnce for Chip {
         let on = self.selected;
         div()
             .id(self.id)
+            .flex()
+            .items_center()
+            .gap(px(5.))
             .px(px(12.))
             .py(px(5.))
             .rounded_full()
@@ -67,8 +78,11 @@ impl RenderOnce for Chip {
             .bg(rgb(if on { TEXT } else { PAGE }))
             .text_color(rgb(if on { PAGE } else { TEXT_SOFT }))
             .when(!on, |d| d.hover(|s| s.bg(rgb(HOVER))))
-            .when(self.open, |d| d.bg(rgb(HOVER)))
+            .when(self.open && !on, |d| d.bg(rgb(HOVER)))
             .child(self.label)
+            .when(self.dropdown, |d| {
+                d.child(icon("chevron-down", 12., if on { PAGE } else { MUTED }))
+            })
             .when_some(self.on_click, |d, f| d.on_click(f))
             .when_some(self.on_press, |d, f| d.on_mouse_down(MouseButton::Left, f))
     }

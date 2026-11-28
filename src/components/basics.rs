@@ -56,14 +56,16 @@ pub fn popover() -> Div {
         inset: false,
     };
     div()
-        .rounded(px(8.))
+        .rounded(px(12.))
         .bg(rgb(PAGE))
+        .border_1()
+        .border_color(rgb(BORDER))
         .text_size(px(14.))
         .text_color(rgb(TEXT))
         .font_family(FONT)
         .shadow(vec![
-            shadow(0.05, 0., 0., 1.),
-            shadow(0.1, 3., 6., 0.),
-            shadow(0.2, 9., 24., 0.),
+            shadow(0.04, 1., 2., 0.),
+            shadow(0.08, 8., 24., -4.),
+            shadow(0.08, 16., 36., -8.),
         ])
 }

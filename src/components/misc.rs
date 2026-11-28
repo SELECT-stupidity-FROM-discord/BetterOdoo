@@ -1,9 +1,10 @@
 use super::icon;
 use crate::scale::px;
+use crate::settings;
 use crate::theme::*;
 use gpui::{
-    AnyElement, App, FontWeight, IntoElement, ParentElement, RenderOnce, SharedString, Window, div,
-    prelude::*, rgb, white,
+    AnyElement, App, FontWeight, IntoElement, ObjectFit, ParentElement, RenderOnce, SharedString,
+    Window, div, img, prelude::*, rgb, white,
 };
 
 #[derive(IntoElement)]
@@ -12,6 +13,7 @@ pub struct Avatar {
     tone: Tone,
     size: f32,
     overlap: bool,
+    is_me: bool,
 }
 
 impl Avatar {
@@ -24,6 +26,7 @@ impl Avatar {
             tone,
             size: 24.,
             overlap: false,
+            is_me: name == "Me",
         }
     }
 
@@ -36,11 +39,16 @@ impl Avatar {
         self.overlap = overlap;
         self
     }
+
+    pub fn for_me(mut self, is_me: bool) -> Self {
+        self.is_me = is_me;
+        self
+    }
 }
 
 impl RenderOnce for Avatar {
     fn render(self, _: &mut Window, _: &mut App) -> impl IntoElement {
-        div()
+        let base = div()
             .flex_none()
             .size(px(self.size))
             .rounded_full()
@@ -53,8 +61,30 @@ impl RenderOnce for Avatar {
             .justify_center()
             .when(self.overlap, |d| {
                 d.ml(px(-8.)).border_2().border_color(white())
-            })
-            .child(self.initial)
+            });
+
+        if self.is_me
+            && let Some(photo) = settings::profile_avatar()
+        {
+            let initial = self.initial;
+            return base.overflow_hidden().child(
+                img(photo)
+                    .size_full()
+                    .object_fit(ObjectFit::Cover)
+                    .rounded_full()
+                    .with_fallback(move || {
+                        div()
+                            .size_full()
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .child(initial.clone())
+                            .into_any_element()
+                    }),
+            );
+        }
+
+        base.child(self.initial)
     }
 }
 

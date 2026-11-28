@@ -8,6 +8,7 @@ pub struct Odoo {
     cookie: Option<String>,
     bearer: Option<(String, String)>,
     uid: i64,
+    partner_id: Option<i64>,
 }
 
 #[derive(Clone, Debug)]
@@ -30,6 +31,21 @@ pub struct Task {
     pub user_ids: Vec<i64>,
     pub tags: Vec<(i64, String)>,
     pub partner: Option<(i64, String)>,
+    pub creator: Option<String>,
+    pub creator_id: Option<i64>,
+    pub personal_stage: Option<String>,
+}
+
+impl Task {
+    pub fn assigned_by(&self, who: &str) -> bool {
+        if self.creator.as_deref() != Some(who) {
+            return false;
+        }
+        match self.creator_id {
+            Some(cid) => self.user_ids.iter().any(|&id| id != cid),
+            None => self.assignees.iter().any(|a| a != who),
+        }
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -57,6 +73,7 @@ pub struct Change {
 #[derive(Clone, Debug)]
 pub struct Message {
     pub author: String,
+    pub is_me: bool,
     pub date: String,
     pub body: Vec<Block>,
     pub changes: Vec<Change>,
@@ -64,10 +81,29 @@ pub struct Message {
 
 #[derive(Clone, Debug)]
 pub struct Timesheet {
+    pub id: i64,
     pub name: String,
     pub hours: f64,
     pub date: String,
     pub user: String,
+    pub task: Option<(i64, String)>,
+    pub project: String,
+}
+
+#[derive(Clone, Debug)]
+pub struct Employee {
+    pub id: i64,
+    pub name: String,
+    pub job_title: String,
+    pub department: String,
+    pub email: String,
+    pub phone: String,
+    pub mobile: String,
+    pub manager: Option<String>,
+    pub location: Option<String>,
+    pub user_id: Option<i64>,
+    pub user_name: Option<String>,
+    pub presence: Option<String>,
 }
 
 #[derive(Clone)]
@@ -145,6 +181,7 @@ impl Odoo {
             cookie: None,
             bearer: None,
             uid: 0,
+            partner_id: None,
         }
     }
 
@@ -197,6 +234,7 @@ impl Odoo {
                 me.uid = res["uid"].as_i64().ok_or_else(|| {
                     anyhow!("Wrong email or password. If you sign in with Google, Microsoft or 2FA, use a session cookie instead.")
                 })?;
+                me.partner_id = res["partner_id"].as_i64();
                 return Ok(me);
             }
             Auth::ApiKey(key) => me.bearer = Some((key.clone(), login.db.clone())),
@@ -208,6 +246,19 @@ impl Odoo {
                 anyhow!("Odoo rejected this sign-in. The key or cookie may be wrong or expired.")
             })?;
         me.uid = ctx["uid"].as_i64().unwrap_or(0);
+        if me.uid <= 0 {
+            return Err(anyhow!(
+                "Odoo rejected this sign-in. The key or cookie may be wrong or expired."
+            ));
+        }
+        me.partner_id = me
+            .call(
+                "res.users",
+                "read",
+                json!({"ids": [me.uid], "fields": ["partner_id"]}),
+            )
+            .ok()
+            .and_then(|rows| rows[0]["partner_id"].get(0)?.as_i64());
         Ok(me)
     }
 
@@ -222,13 +273,48 @@ impl Odoo {
         Ok(format!("Odoo {}", serie.trim_end_matches(".0")))
     }
 
+    fn send_with_retry<F>(&self, mut make_req: F) -> Result<Value>
+    where
+        F: FnMut() -> Result<Value>,
+    {
+        let mut last_err = None;
+        for delay_ms in [0u64, 500, 1500] {
+            if delay_ms > 0 {
+                std::thread::sleep(std::time::Duration::from_millis(delay_ms));
+            }
+            match make_req() {
+                Ok(v) => return Ok(v),
+                Err(e) => {
+                    let msg = e.to_string();
+                    let transient = msg.contains("http status: 502")
+                        || msg.contains("http status: 503")
+                        || msg.contains("http status: 504")
+                        || msg.contains("http status: 429");
+                    if !transient {
+                        return Err(e);
+                    }
+                    last_err = Some(e);
+                }
+            }
+        }
+        Err(anyhow!(
+            "Odoo server is temporarily unavailable ({}). Try again in a moment.",
+            last_err
+                .map(|e| e.to_string())
+                .unwrap_or_else(|| "gateway error".into())
+        ))
+    }
+
     fn rpc(&self, path: &str, params: Value) -> Result<Value> {
         let body = json!({"jsonrpc": "2.0", "method": "call", "params": params});
-        let mut req = self.agent.post(format!("{}{path}", self.url));
-        if let Some(c) = &self.cookie {
-            req = req.header("Cookie", &format!("session_id={c}"));
-        }
-        let mut v: Value = req.send_json(&body)?.body_mut().read_json()?;
+        let url = format!("{}{path}", self.url);
+        let mut v = self.send_with_retry(|| {
+            let mut req = self.agent.post(&url);
+            if let Some(c) = &self.cookie {
+                req = req.header("Cookie", &format!("session_id={c}"));
+            }
+            Ok(req.send_json(&body)?.body_mut().read_json()?)
+        })?;
         if let Some(e) = v.get("error") {
             return Err(anyhow!(
                 "odoo: {}",
@@ -240,14 +326,17 @@ impl Odoo {
 
     pub fn call(&self, model: &str, method: &str, mut kw: Value) -> Result<Value> {
         if let Some((key, db)) = &self.bearer {
-            let mut req = self
-                .agent
-                .post(format!("{}/json/2/{model}/{method}", self.url))
-                .header("Authorization", &format!("bearer {key}"));
-            if !db.is_empty() {
-                req = req.header("X-Odoo-Database", db);
-            }
-            return Ok(req.send_json(&kw)?.body_mut().read_json()?);
+            let url = format!("{}/json/2/{model}/{method}", self.url);
+            return self.send_with_retry(|| {
+                let mut req = self
+                    .agent
+                    .post(&url)
+                    .header("Authorization", &format!("bearer {key}"));
+                if !db.is_empty() {
+                    req = req.header("X-Odoo-Database", db);
+                }
+                Ok(req.send_json(&kw)?.body_mut().read_json()?)
+            });
         }
         let mut take = |key: &str| kw.as_object_mut().and_then(|o| o.remove(key));
         let args = take("ids")
@@ -264,6 +353,14 @@ impl Odoo {
     }
 
     pub fn tasks(&self, domain: Value) -> Result<Vec<Task>> {
+        self.read_tasks(domain, false)
+    }
+
+    pub fn todos(&self) -> Result<Vec<Task>> {
+        self.read_tasks(json!([["project_id", "=", false], ["parent_id", "=", false]]), true)
+    }
+
+    fn read_tasks(&self, domain: Value, personal_stage: bool) -> Result<Vec<Task>> {
         let fields = [
             "name",
             "project_id",
@@ -271,6 +368,7 @@ impl Odoo {
             "sequence",
             "stage_id",
             "user_ids",
+            "create_uid",
             "date_deadline",
             "priority",
             "effective_hours",
@@ -283,10 +381,23 @@ impl Odoo {
                 json!({"domain": domain, "fields": fields, "order": "priority desc, date_deadline asc"}),
             )
         };
-        let rows = query(&["state", "date_last_stage_update", "tag_ids", "partner_id"])
-            .or_else(|_| query(&["state", "date_last_stage_update"]))
-            .or_else(|_| query(&["state"]))
-            .or_else(|_| query(&[]))?;
+        let rows = if personal_stage {
+            try_odoo_fallback(
+                query(&[
+                    "state",
+                    "date_last_stage_update",
+                    "tag_ids",
+                    "partner_id",
+                    "personal_stage_type_id",
+                ]),
+                || query(&["state", "date_last_stage_update", "tag_ids", "partner_id"]),
+            )
+        } else {
+            query(&["state", "date_last_stage_update", "tag_ids", "partner_id"])
+        };
+        let rows = try_odoo_fallback(rows, || query(&["state", "date_last_stage_update"]));
+        let rows = try_odoo_fallback(rows, || query(&["state"]));
+        let rows = try_odoo_fallback(rows, || query(&[]))?;
         let stage_ids: Vec<i64> = rows
             .as_array()
             .into_iter()
@@ -405,6 +516,18 @@ impl Odoo {
                     .get(0)
                     .and_then(|v| v.as_i64())
                     .map(|id| (id, m2o(&r["partner_id"]))),
+                creator: r["create_uid"].get(0).and_then(|v| v.as_i64()).map(|id| {
+                    if id == self.uid {
+                        "Me".to_string()
+                    } else {
+                        m2o(&r["create_uid"])
+                    }
+                }),
+                creator_id: r["create_uid"].get(0).and_then(|v| v.as_i64()),
+                personal_stage: r["personal_stage_type_id"]
+                    .get(1)
+                    .and_then(|s| s.as_str())
+                    .map(Into::into),
                 priority_high: r["priority"] == "1",
                 logged_hours: r["effective_hours"].as_f64().unwrap_or(0.),
                 done: matches!(r["state"].as_str(), Some("1_done" | "1_canceled"))
@@ -479,20 +602,29 @@ impl Odoo {
     }
 
     pub fn timesheets(&self, task: i64) -> Result<Vec<Timesheet>> {
-        let rows = self.call(
-            "account.analytic.line",
-            "search_read",
-            json!({
-                "domain": [["task_id", "=", task]],
-                "fields": ["name", "unit_amount", "date", "user_id"],
-                "order": "date desc, id desc",
-            }),
-        )?;
+        self.read_timesheets(json!([["task_id", "=", task]]), None)
+    }
+
+    pub fn all_timesheets(&self) -> Result<Vec<Timesheet>> {
+        self.read_timesheets(json!([["project_id", "!=", false]]), Some(200))
+    }
+
+    fn read_timesheets(&self, domain: Value, limit: Option<usize>) -> Result<Vec<Timesheet>> {
+        let mut kw = json!({
+            "domain": domain,
+            "fields": ["name", "unit_amount", "date", "user_id", "task_id", "project_id"],
+            "order": "date desc, id desc",
+        });
+        if let Some(n) = limit {
+            kw["limit"] = json!(n);
+        }
+        let rows = self.call("account.analytic.line", "search_read", kw)?;
         Ok(rows
             .as_array()
             .into_iter()
             .flatten()
             .map(|r| Timesheet {
+                id: r["id"].as_i64().unwrap_or(0),
                 name: r["name"].as_str().unwrap_or("").into(),
                 hours: r["unit_amount"].as_f64().unwrap_or(0.),
                 date: r["date"].as_str().unwrap_or("").into(),
@@ -501,6 +633,11 @@ impl Odoo {
                 } else {
                     m2o(&r["user_id"])
                 },
+                task: r["task_id"]
+                    .get(0)
+                    .and_then(|v| v.as_i64())
+                    .map(|id| (id, m2o(&r["task_id"]))),
+                project: m2o(&r["project_id"]),
             })
             .collect())
     }
@@ -519,6 +656,19 @@ impl Odoo {
     }
 
     pub fn messages(&self, task: i64) -> Result<Vec<Message>> {
+        if self.bearer.is_none()
+            && let Ok(res) = self.rpc(
+                "/mail/thread/messages",
+                json!({
+                    "thread_model": "project.task",
+                    "thread_id": task,
+                    "limit": 50,
+                }),
+            )
+            && let Some(parsed) = parse_thread_messages(&res, &self.url, self.partner_id)
+        {
+            return Ok(parsed);
+        }
         let rows = self.call(
             "mail.message",
             "search_read",
@@ -530,6 +680,9 @@ impl Odoo {
         )?;
         let rows = rows.as_array().cloned().unwrap_or_default();
         let ids: Vec<i64> = rows.iter().filter_map(|r| r["id"].as_i64()).collect();
+        if ids.is_empty() {
+            return Ok(Vec::new());
+        }
         let tracking = self
             .call(
                 "mail.tracking.value",
@@ -538,6 +691,7 @@ impl Odoo {
                     "domain": [["mail_message_id", "in", ids]],
                     "fields": [
                         "mail_message_id", "field_id", "old_value_char", "new_value_char",
+                        "old_value_text", "new_value_text",
                         "old_value_datetime", "new_value_datetime", "old_value_integer",
                         "new_value_integer", "old_value_float", "new_value_float",
                     ],
@@ -546,7 +700,7 @@ impl Odoo {
             .unwrap_or(json!([]));
         let tracking = tracking.as_array().cloned().unwrap_or_default();
         let pick = |t: &Value, side: &str| {
-            ["char", "datetime", "integer", "float"]
+            ["char", "text", "datetime", "integer", "float"]
                 .iter()
                 .map(|k| &t[format!("{side}_value_{k}")])
                 .find(|v| !v.is_null() && **v != json!(false) && **v != json!(""))
@@ -558,6 +712,8 @@ impl Odoo {
             .iter()
             .map(|r| Message {
                 author: m2o(&r["author_id"]),
+                is_me: self.partner_id.is_some()
+                    && r["author_id"].get(0).and_then(|v| v.as_i64()) == self.partner_id,
                 date: r["date"].as_str().unwrap_or("").into(),
                 body: html::parse(r["body"].as_str().unwrap_or(""), &self.url),
                 changes: tracking
@@ -653,6 +809,102 @@ impl Odoo {
         self.write(&[task], json!({"state": state}))
     }
 
+    pub fn set_priority(&self, task: i64, high: bool) -> Result<()> {
+        self.write(&[task], json!({"priority": if high { "1" } else { "0" }}))
+    }
+
+    pub fn create_todo(&self, name: &str, deadline: Option<&str>) -> Result<()> {
+        let mut vals = json!({
+            "name": name,
+            "user_ids": [[6, 0, [self.uid]]],
+        });
+        if let Some(d) = deadline {
+            vals["date_deadline"] = json!(d);
+        }
+        self.call("project.task", "create", json!({"vals_list": [vals]}))?;
+        Ok(())
+    }
+
+    pub fn employees(&self) -> Result<Vec<Employee>> {
+        let base = [
+            "name",
+            "job_title",
+            "department_id",
+            "work_email",
+            "work_phone",
+            "parent_id",
+            "user_id",
+        ];
+        let query = |model: &str, extra: &[&str]| {
+            let fields: Vec<&str> = base.iter().chain(extra).copied().collect();
+            self.call(
+                model,
+                "search_read",
+                json!({
+                    "domain": [],
+                    "fields": fields,
+                    "order": "name asc",
+                }),
+            )
+        };
+        let rows = try_odoo_fallback(
+            query(
+                "hr.employee.public",
+                &["mobile_phone", "work_location_id", "hr_presence_state"],
+            ),
+            || query("hr.employee.public", &["mobile_phone"]),
+        );
+        let rows = try_odoo_fallback(rows, || query("hr.employee.public", &[]));
+        let rows = try_odoo_fallback(rows, || {
+            query(
+                "hr.employee",
+                &["mobile_phone", "work_location_id", "hr_presence_state"],
+            )
+        });
+        let rows = try_odoo_fallback(rows, || query("hr.employee", &["mobile_phone"]));
+        let rows = try_odoo_fallback(rows, || query("hr.employee", &[]))?;
+        let text = |v: &Value| v.as_str().unwrap_or("").trim().to_string();
+        Ok(rows
+            .as_array()
+            .into_iter()
+            .flatten()
+            .map(|r| {
+                let user_id = r["user_id"].get(0).and_then(|v| v.as_i64());
+                let user_name = user_id.map(|id| {
+                    if id == self.uid {
+                        "Me".to_string()
+                    } else {
+                        m2o(&r["user_id"])
+                    }
+                });
+                Employee {
+                    id: r["id"].as_i64().unwrap_or(0),
+                    name: text(&r["name"]),
+                    job_title: text(&r["job_title"]),
+                    department: r["department_id"]
+                        .get(1)
+                        .and_then(|s| s.as_str())
+                        .unwrap_or("")
+                        .into(),
+                    email: text(&r["work_email"]),
+                    phone: text(&r["work_phone"]),
+                    mobile: text(&r["mobile_phone"]),
+                    manager: r["parent_id"]
+                        .get(1)
+                        .and_then(|s| s.as_str())
+                        .map(Into::into),
+                    location: r["work_location_id"]
+                        .get(1)
+                        .and_then(|s| s.as_str())
+                        .map(Into::into),
+                    user_id,
+                    user_name,
+                    presence: r["hr_presence_state"].as_str().map(Into::into),
+                }
+            })
+            .collect())
+    }
+
     pub fn resequence(&self, order: &[i64]) -> Result<()> {
         for (i, id) in order.iter().enumerate() {
             self.write(&[*id], json!({"sequence": (i as i64 + 1) * 10}))?;
@@ -704,6 +956,203 @@ fn m2o(v: &Value) -> String {
     v.get(1).and_then(|s| s.as_str()).unwrap_or("—").into()
 }
 
+fn try_odoo_fallback<T>(
+    first: Result<T>,
+    next: impl FnOnce() -> Result<T>,
+) -> Result<T> {
+    match first {
+        Ok(v) => Ok(v),
+        Err(e) if e.to_string().starts_with("odoo:") => next(),
+        Err(e) => Err(e),
+    }
+}
+
+fn format_tracking_val(v: &Value) -> String {
+    if v.is_null() || *v == json!(false) || *v == json!("") {
+        return "None".into();
+    }
+    if let Some(obj) = v.as_object() {
+        if let Some(inner) = obj.get("value") {
+            return format_tracking_val(inner);
+        }
+        if let Some(name) = obj.get("name").and_then(|s| s.as_str()) {
+            return name.to_string();
+        }
+    }
+    v.as_str().map_or_else(|| v.to_string(), str::to_string)
+}
+
+fn parse_tracking_entry(t: &Value) -> Option<Change> {
+    let field = t["fieldInfo"]["desc"]
+        .as_str()
+        .or_else(|| t["field_desc"].as_str())
+        .or_else(|| t["changedField"].as_str())
+        .or_else(|| t["field"].get("desc").and_then(|v| v.as_str()))
+        .or_else(|| t["field_id"].get(1).and_then(|v| v.as_str()))
+        .or_else(|| t["field"].as_str())?
+        .to_string();
+    let pick_side = |keys: &[&str]| {
+        keys.iter()
+            .map(|k| &t[*k])
+            .find(|v| !v.is_null() && **v != json!(false) && **v != json!(""))
+            .map_or_else(|| "None".into(), format_tracking_val)
+    };
+    let old = pick_side(&[
+        "oldValue",
+        "old_value_char",
+        "old_value_text",
+        "old_value_datetime",
+        "old_value_integer",
+        "old_value_float",
+        "old_value",
+    ]);
+    let new = pick_side(&[
+        "newValue",
+        "new_value_char",
+        "new_value_text",
+        "new_value_datetime",
+        "new_value_integer",
+        "new_value_float",
+        "new_value",
+    ]);
+    Some(Change { field, old, new })
+}
+
+fn parse_thread_messages(
+    res: &Value,
+    base_url: &str,
+    me_partner_id: Option<i64>,
+) -> Option<Vec<Message>> {
+    let author_pid = |m: &Value| {
+        m["author_id"]
+            .as_i64()
+            .or_else(|| m["author_id"].get(0).and_then(|v| v.as_i64()))
+            .or_else(|| m["author"].get("id").and_then(|v| v.as_i64()))
+            .or_else(|| m["author_id"].get("id").and_then(|v| v.as_i64()))
+    };
+    // Odoo 18/19/20 Store format: { data: { "mail.message": [...], "res.partner": [...], "mail.tracking.value": [...] } }
+    if let Some(data) = res.get("data").and_then(|d| d.as_object())
+        && let Some(raw_msgs) = data.get("mail.message").and_then(|m| m.as_array())
+    {
+        let partners: std::collections::HashMap<i64, String> = data
+            .get("res.partner")
+            .and_then(|p| p.as_array())
+            .into_iter()
+            .flatten()
+            .filter_map(|p| Some((p["id"].as_i64()?, p["name"].as_str()?.to_string())))
+            .collect();
+        let tracking_by_id: std::collections::HashMap<i64, &Value> = data
+            .get("mail.tracking.value")
+            .and_then(|t| t.as_array())
+            .into_iter()
+            .flatten()
+            .filter_map(|t| Some((t["id"].as_i64()?, t)))
+            .collect();
+        let mut msgs: Vec<(i64, Message)> = raw_msgs
+            .iter()
+            .map(|m| {
+                let id = m["id"].as_i64().unwrap_or(0);
+                let pid = author_pid(m);
+                let author = pid
+                    .and_then(|pid| partners.get(&pid).cloned())
+                    .or_else(|| {
+                        m["author"]
+                            .get("name")
+                            .and_then(|s| s.as_str())
+                            .map(String::from)
+                    })
+                    .or_else(|| {
+                        m["author_id"]
+                            .get(1)
+                            .and_then(|s| s.as_str())
+                            .map(String::from)
+                    })
+                    .or_else(|| {
+                        m["author_id"]
+                            .get("name")
+                            .and_then(|s| s.as_str())
+                            .map(String::from)
+                    })
+                    .unwrap_or_else(|| "System".into());
+                let raw_body = m["body"]
+                    .as_str()
+                    .or_else(|| m["body"].as_array().and_then(|a| a.get(1)?.as_str()))
+                    .unwrap_or("");
+                let tracking_list = m["trackingValues"]
+                    .as_array()
+                    .or_else(|| m["tracking_value_ids"].as_array());
+                let changes: Vec<Change> = tracking_list
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|entry| {
+                        if let Some(tid) = entry.as_i64() {
+                            tracking_by_id.get(&tid).and_then(|t| parse_tracking_entry(t))
+                        } else {
+                            parse_tracking_entry(entry)
+                        }
+                    })
+                    .collect();
+                (
+                    id,
+                    Message {
+                        author,
+                        is_me: me_partner_id.is_some() && pid == me_partner_id,
+                        date: m["date"].as_str().unwrap_or("").into(),
+                        body: html::parse(raw_body, base_url),
+                        changes,
+                    },
+                )
+            })
+            .filter(|(_, m)| !m.body.is_empty() || !m.changes.is_empty())
+            .collect();
+        msgs.sort_by_key(|(id, _)| std::cmp::Reverse(*id));
+        return Some(msgs.into_iter().map(|(_, m)| m).collect());
+    }
+
+    // Inline format: { messages: [...] } or [...]
+    let raw_msgs = res
+        .get("messages")
+        .and_then(|m| m.as_array())
+        .or_else(|| res.as_array())?;
+    let mut msgs: Vec<(i64, Message)> = raw_msgs
+        .iter()
+        .map(|m| {
+            let id = m["id"].as_i64().unwrap_or(0);
+            let pid = author_pid(m);
+            let author = m["author"]
+                .get("name")
+                .and_then(|s| s.as_str())
+                .map(String::from)
+                .or_else(|| m["author_id"].get(1).and_then(|s| s.as_str()).map(String::from))
+                .unwrap_or_else(|| "System".into());
+            let raw_body = m["body"]
+                .as_str()
+                .or_else(|| m["body"].as_array().and_then(|a| a.get(1)?.as_str()))
+                .unwrap_or("");
+            let changes = m["trackingValues"]
+                .as_array()
+                .or_else(|| m["tracking_value_ids"].as_array())
+                .into_iter()
+                .flatten()
+                .filter_map(parse_tracking_entry)
+                .collect();
+            (
+                id,
+                Message {
+                    author,
+                    is_me: me_partner_id.is_some() && pid == me_partner_id,
+                    date: m["date"].as_str().unwrap_or("").into(),
+                    body: html::parse(raw_body, base_url),
+                    changes,
+                },
+            )
+        })
+        .filter(|(_, m)| !m.body.is_empty() || !m.changes.is_empty())
+        .collect();
+    msgs.sort_by_key(|(id, _)| std::cmp::Reverse(*id));
+    Some(msgs.into_iter().map(|(_, m)| m).collect())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -735,5 +1184,89 @@ mod tests {
             matches!(back.auth, Auth::Password { login, password } if login == "me@yourco.com" && password == "p\nw")
         );
         assert!(Login::from_credentials("bogus", vec![]).is_none());
+    }
+
+    #[test]
+    fn assigned_by_matches_tasks_created_for_others() {
+        let task = |creator: Option<&str>,
+                    creator_id: Option<i64>,
+                    user_ids: Vec<i64>,
+                    assignees: Vec<&str>| Task {
+            id: 1,
+            name: "T".into(),
+            project: "P".into(),
+            project_id: Some(1),
+            parent: None,
+            sequence: 0,
+            stage_id: None,
+            stage: "Open".into(),
+            state: "".into(),
+            assignees: assignees.into_iter().map(String::from).collect(),
+            deadline: None,
+            priority_high: false,
+            logged_hours: 0.,
+            done: false,
+            stage_since: None,
+            user_ids,
+            tags: vec![],
+            partner: None,
+            creator: creator.map(String::from),
+            creator_id,
+            personal_stage: None,
+        };
+        assert!(task(Some("Me"), Some(1), vec![2], vec!["Alice"]).assigned_by("Me"));
+        assert!(task(Some("Me"), Some(1), vec![1, 2], vec!["Me", "Alice"]).assigned_by("Me"));
+        assert!(!task(Some("Me"), Some(1), vec![1], vec!["Me"]).assigned_by("Me"));
+        assert!(!task(Some("Me"), Some(1), vec![], vec![]).assigned_by("Me"));
+        assert!(task(Some("Alice"), Some(2), vec![3], vec!["Bob"]).assigned_by("Alice"));
+        assert!(!task(Some("Alice"), Some(2), vec![3], vec!["Bob"]).assigned_by("Me"));
+        assert!(!task(Some("Alice"), Some(2), vec![2], vec!["Alice"]).assigned_by("Alice"));
+        assert!(!task(None, None, vec![2], vec!["Alice"]).assigned_by("Me"));
+        assert!(task(Some("Me"), None, vec![], vec!["Alice"]).assigned_by("Me"));
+        assert!(!task(Some("Me"), None, vec![], vec!["Me"]).assigned_by("Me"));
+    }
+
+    #[test]
+    fn parses_odoo_store_thread_messages_with_tracking() {
+        let payload = json!({
+            "data": {
+                "res.partner": [
+                    {"id": 7, "name": "Alice"}
+                ],
+                "mail.tracking.value": [
+                    {
+                        "id": 99,
+                        "fieldInfo": {"desc": "Stage"},
+                        "oldValue": {"value": "Development"},
+                        "newValue": {"value": "Production"}
+                    }
+                ],
+                "mail.message": [
+                    {
+                        "id": 10,
+                        "author_id": 7,
+                        "date": "2026-11-28 06:00:00",
+                        "body": ["markup", ""],
+                        "trackingValues": [99]
+                    },
+                    {
+                        "id": 11,
+                        "author_id": 7,
+                        "date": "2026-11-28 06:05:00",
+                        "body": "<p>Looks good</p>",
+                        "trackingValues": []
+                    }
+                ]
+            }
+        });
+        let msgs = parse_thread_messages(&payload, "https://acme.odoo.com", Some(7)).unwrap();
+        assert_eq!(msgs.len(), 2);
+        assert_eq!(msgs[0].author, "Alice");
+        assert!(msgs[0].is_me);
+        assert!(!msgs[0].body.is_empty());
+        assert_eq!(msgs[1].changes.len(), 1);
+        assert_eq!(msgs[1].changes[0].field, "Stage");
+        assert_eq!(msgs[1].changes[0].old, "Development");
+        assert_eq!(msgs[1].changes[0].new, "Production");
     }
 }

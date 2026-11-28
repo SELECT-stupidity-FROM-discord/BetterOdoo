@@ -200,7 +200,11 @@ fn entry(m: &Message, time: String) -> impl IntoElement {
     div()
         .flex()
         .gap(px(12.))
-        .child(Avatar::new(&m.author, person_tone(&[], &m.author)).size(30.))
+        .child(
+            Avatar::new(&m.author, person_tone(&[], &m.author))
+                .for_me(m.is_me)
+                .size(30.),
+        )
         .child(
             div()
                 .flex_1()

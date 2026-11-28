@@ -8,9 +8,21 @@ use gpui::{
     prelude::*, rgb, white,
 };
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum Section {
+    Tasks,
+    Todos,
+    Timesheets,
+    Employees,
+    Settings,
+}
+
 pub enum SidebarEvent {
     Tasks,
     Project(String),
+    Todos,
+    Timesheets,
+    Employees,
     Settings,
     Search,
 }
@@ -19,7 +31,7 @@ pub struct Sidebar {
     store: Entity<Store>,
     list: Entity<TaskList>,
     shortcuts: bool,
-    settings_open: bool,
+    section: Section,
 }
 
 impl EventEmitter<SidebarEvent> for Sidebar {}
@@ -32,7 +44,7 @@ impl Sidebar {
             store,
             list,
             shortcuts: false,
-            settings_open: false,
+            section: Section::Tasks,
         }
     }
 
@@ -47,8 +59,8 @@ impl Sidebar {
         open
     }
 
-    pub fn set_settings_open(&mut self, open: bool, cx: &mut Context<Self>) {
-        self.settings_open = open;
+    pub fn set_section(&mut self, section: Section, cx: &mut Context<Self>) {
+        self.section = section;
         cx.notify();
     }
 
@@ -148,7 +160,7 @@ impl Sidebar {
 
     fn footer(&self, cx: &mut Context<Self>) -> Div {
         let store = self.store.read(cx);
-        let open = self.settings_open;
+        let open = self.section == Section::Settings;
         div()
             .flex()
             .items_center()
@@ -227,11 +239,32 @@ impl Render for Sidebar {
             .child(
                 NavItem::new("nav-tasks", "My Tasks")
                     .icon("tasks")
-                    .active(current.is_none() && !self.settings_open)
+                    .active(self.section == Section::Tasks && current.is_none())
                     .child(muted(count.to_string()))
                     .on_click(cx.listener(|_, _: &ClickEvent, _, cx| cx.emit(SidebarEvent::Tasks))),
             )
-            .child(NavItem::new("nav-timesheets", "Timesheets").icon("clock"))
+            .child(
+                NavItem::new("nav-todos", "To-Dos")
+                    .icon("todo")
+                    .active(self.section == Section::Todos)
+                    .on_click(cx.listener(|_, _: &ClickEvent, _, cx| cx.emit(SidebarEvent::Todos))),
+            )
+            .child(
+                NavItem::new("nav-timesheets", "Timesheets")
+                    .icon("clock")
+                    .active(self.section == Section::Timesheets)
+                    .on_click(
+                        cx.listener(|_, _: &ClickEvent, _, cx| cx.emit(SidebarEvent::Timesheets)),
+                    ),
+            )
+            .child(
+                NavItem::new("nav-employees", "Employees")
+                    .icon("users")
+                    .active(self.section == Section::Employees)
+                    .on_click(
+                        cx.listener(|_, _: &ClickEvent, _, cx| cx.emit(SidebarEvent::Employees)),
+                    ),
+            )
             .child(
                 div()
                     .px(px(10.))
@@ -255,7 +288,7 @@ impl Render for Sidebar {
                         let name = p.clone();
                         NavItem::new(("project", i), p.clone())
                             .dot(PEOPLE[i % PEOPLE.len()].fg)
-                            .active(current.as_ref() == Some(&p) && !self.settings_open)
+                            .active(self.section == Section::Tasks && current.as_ref() == Some(&p))
                             .on_click(cx.listener(move |_, _: &ClickEvent, _, cx| {
                                 cx.emit(SidebarEvent::Project(name.clone()))
                             }))

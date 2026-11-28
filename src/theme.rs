@@ -41,6 +41,42 @@ pub const PURPLE: Tone = Tone {
     bg: 0xf6f3f9,
     fg: 0x7a4f9c,
 };
+pub const STAGE_GRAY: Tone = Tone {
+    bg: 0xf1f1ef,
+    fg: 0x5f5e5b,
+};
+pub const STAGE_BLUE: Tone = Tone {
+    bg: 0xe9f2f7,
+    fg: 0x2d688a,
+};
+pub const STAGE_AMBER: Tone = Tone {
+    bg: 0xf7efe2,
+    fg: 0x8f5b1e,
+};
+pub const STAGE_PURPLE: Tone = Tone {
+    bg: 0xf4eff8,
+    fg: 0x6f4d8e,
+};
+pub const STAGE_CYAN: Tone = Tone {
+    bg: 0xeaf4f2,
+    fg: 0x2f6f6a,
+};
+pub const STAGE_GREEN: Tone = Tone {
+    bg: 0xedf4ee,
+    fg: 0x3a6f4f,
+};
+pub const STAGE_RED: Tone = Tone {
+    bg: 0xfaeeee,
+    fg: 0x9e3f3d,
+};
+pub const STAGE_PINK: Tone = Tone {
+    bg: 0xf8eef3,
+    fg: 0x8f456b,
+};
+pub const STAGE_ORANGE: Tone = Tone {
+    bg: 0xf9ece0,
+    fg: 0x9a521b,
+};
 pub const AI_BORDER: u32 = 0xe6dcef;
 
 pub const PEOPLE: [Tone; 4] = [BLUE, ORANGE, GREEN, PURPLE];

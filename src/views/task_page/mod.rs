@@ -119,6 +119,7 @@ impl TaskPage {
         self.properties.update(cx, |p, cx| p.set_task(id, cx));
         self.store.update(cx, |s, cx| {
             s.ensure_detail(id, cx);
+            s.refresh_messages(id, cx);
             s.ensure_stages(project.flatten(), cx);
         });
         window.focus(&self.root, cx);
@@ -256,6 +257,9 @@ impl TaskPage {
         let tab = |which: Tab| {
             cx.listener(move |this, _: &ClickEvent, _, cx| {
                 this.tab = which;
+                if which == Tab::Activity {
+                    this.store.update(cx, |s, cx| s.refresh_messages(this.id, cx));
+                }
                 cx.notify()
             })
         };

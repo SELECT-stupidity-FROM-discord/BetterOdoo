@@ -813,6 +813,8 @@ impl Render for TextInput {
         div()
             .flex()
             .flex_1()
+            .min_w_0()
+            .overflow_hidden()
             .key_context(CONTEXT)
             .track_focus(&self.focus_handle)
             .cursor(CursorStyle::IBeam)

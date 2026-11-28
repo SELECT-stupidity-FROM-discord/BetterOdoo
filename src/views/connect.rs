@@ -1,3 +1,4 @@
+use crate::browser_login::{self, BrowserWindow};
 use crate::components::{Button, Field, Variant, icon, tag};
 use crate::input::{InputEvent, TextInput};
 use crate::odoo::{Auth, Login, Odoo, Probe};
@@ -7,7 +8,10 @@ use gpui::{
     BoxShadow, ClickEvent, Context, Div, Entity, EventEmitter, Focusable, FontWeight,
     HighlightStyle, SharedString, Stateful, StyledText, Window, div, point, prelude::*, rgb,
 };
-use std::{sync::Arc, time::Duration};
+use std::{
+    sync::Arc,
+    time::{Duration, Instant},
+};
 
 const RADIO_OFF: u32 = 0x9b9a97;
 
@@ -23,7 +27,7 @@ const METHODS: [(Method, &str, &str); 4] = [
     (
         Method::Browser,
         "Continue in browser window",
-        "Google, Microsoft, SSO, 2FA, or password. Works for everyone.",
+        "SSO, 2FA, or password. Signs in on Odoo’s page and connects automatically.",
     ),
     (
         Method::Password,
@@ -63,6 +67,8 @@ pub struct ConnectView {
     method: Method,
     check: Check,
     generation: usize,
+    browser: Option<BrowserWindow>,
+    browser_gen: usize,
     busy: bool,
     error: Option<SharedString>,
 }
@@ -86,9 +92,15 @@ impl ConnectView {
             password,
             api_key,
             cookie,
-            method: Method::Password,
+            method: if browser_login::is_supported() {
+                Method::Browser
+            } else {
+                Method::Password
+            },
             check: Check::Idle,
             generation: 0,
+            browser: None,
+            browser_gen: 0,
             busy: false,
             error: error.map(Into::into),
         }
@@ -142,7 +154,11 @@ impl ConnectView {
                 this.check = match r {
                     Ok(p) => {
                         if p.sso.is_some() && this.method == Method::Password {
-                            this.method = Method::Cookie;
+                            this.method = if browser_login::is_supported() {
+                                Method::Browser
+                            } else {
+                                Method::Cookie
+                            };
                         }
                         Check::Found(p)
                     }
@@ -151,6 +167,131 @@ impl ConnectView {
                 cx.notify();
             })
             .ok();
+        })
+        .detach();
+    }
+
+    fn cancel_browser(&mut self, cx: &mut Context<Self>) {
+        self.browser_gen += 1;
+        self.browser.take();
+        if self.method == Method::Browser {
+            self.busy = false;
+        }
+        cx.notify();
+    }
+
+    fn start_browser_login(&mut self, probe: Probe, cx: &mut Context<Self>) {
+        let Some(host) = browser_login::url_host(&probe.url) else {
+            return self.fail("Invalid Odoo address.", cx);
+        };
+        let url = browser_login::login_url(&probe.url, &probe.db);
+        let browser = match BrowserWindow::open(&url) {
+            Ok(w) => w,
+            Err(e) => return self.fail(&e.to_string(), cx),
+        };
+        self.browser_gen += 1;
+        let browser_gen = self.browser_gen;
+        self.browser = Some(browser);
+        self.busy = true;
+        self.error = None;
+        cx.notify();
+
+        cx.spawn(async move |this, cx| {
+            let mut last_failed: Option<(String, String, Instant)> = None;
+            loop {
+                cx.background_executor()
+                    .timer(Duration::from_millis(400))
+                    .await;
+                let poll = this
+                    .read_with(cx, |this, _| {
+                        if this.browser_gen != browser_gen {
+                            return Err(());
+                        }
+                        let Some(b) = &this.browser else {
+                            return Err(());
+                        };
+                        if !b.is_open() {
+                            return Ok(None);
+                        }
+                        let current = b.current_url().unwrap_or_default();
+                        if !browser_login::is_post_login_url(&current, &host) {
+                            return Ok(Some((current, None)));
+                        }
+                        Ok(Some((current, Some(b.request_session_cookie(&host)))))
+                    })
+                    .unwrap_or(Err(()));
+
+                let (current_url, rx) = match poll {
+                    Err(()) => return,
+                    Ok(None) => {
+                        this.update(cx, |this, cx| {
+                            if this.browser_gen == browser_gen {
+                                this.browser.take();
+                                this.busy = false;
+                                cx.notify();
+                            }
+                        })
+                        .ok();
+                        return;
+                    }
+                    Ok(Some((_, None))) => continue,
+                    Ok(Some((current_url, Some(rx)))) => (current_url, rx),
+                };
+
+                let mut session_id = None;
+                for _ in 0..40 {
+                    cx.background_executor()
+                        .timer(Duration::from_millis(50))
+                        .await;
+                    if let Ok(found) = rx.try_recv() {
+                        session_id = found;
+                        break;
+                    }
+                }
+                let Some(session_id) = session_id else {
+                    continue;
+                };
+
+                if let Some((prev_cookie, prev_url, at)) = &last_failed
+                    && prev_cookie == &session_id
+                    && prev_url == &current_url
+                    && at.elapsed() < Duration::from_millis(1500)
+                {
+                    continue;
+                }
+
+                let login = Login {
+                    url: probe.url.clone(),
+                    db: probe.db.clone(),
+                    auth: Auth::Session(session_id.clone()),
+                };
+                let attempt = login.clone();
+                let r = cx
+                    .background_executor()
+                    .spawn(async move { Odoo::connect(&attempt) })
+                    .await;
+
+                match r {
+                    Ok(odoo) => {
+                        this.update(cx, |this, cx| {
+                            if this.browser_gen == browser_gen {
+                                this.browser.take();
+                                this.busy = false;
+                                cx.emit(Connected {
+                                    odoo: Arc::new(odoo),
+                                    login,
+                                });
+                                cx.notify();
+                            }
+                        })
+                        .ok();
+                        return;
+                    }
+                    Err(_) => {
+                        last_failed = Some((session_id, current_url, Instant::now()));
+                    }
+                }
+            }
         })
         .detach();
     }
@@ -164,9 +305,19 @@ impl ConnectView {
             window.focus(&self.address.focus_handle(cx), cx);
             return;
         };
+        if self.method == Method::Browser {
+            let probe = Probe {
+                url: probe.url.clone(),
+                version: probe.version.clone(),
+                db: probe.db.clone(),
+                sso: probe.sso,
+            };
+            self.start_browser_login(probe, cx);
+            return;
+        }
         let value = |input: &Entity<TextInput>| input.read(cx).text().trim().to_string();
         let auth = match self.method {
-            Method::Browser => return,
+            Method::Browser => unreachable!(),
             Method::Password => {
                 let (login, password) = (value(&self.email), value(&self.password));
                 if login.is_empty() || password.is_empty() {
@@ -221,7 +372,7 @@ impl ConnectView {
     fn method_card(&self, i: usize, cx: &mut Context<Self>) -> Stateful<Div> {
         let (method, title, sub) = METHODS[i];
         let on = self.method == method;
-        let disabled = method == Method::Browser;
+        let disabled = method == Method::Browser && !browser_login::is_supported();
         let radio = if on {
             div()
                 .size(px(14.))
@@ -262,9 +413,12 @@ impl ConnectView {
             .when(!disabled, |d| {
                 d.cursor_pointer()
                     .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
-                        this.method = method;
-                        this.error = None;
-                        cx.notify()
+                        if this.method != method {
+                            this.cancel_browser(cx);
+                            this.method = method;
+                            this.error = None;
+                            cx.notify();
+                        }
                     }))
             })
             .child(div().flex_none().mt(px(3.)).child(radio))
@@ -304,7 +458,21 @@ impl ConnectView {
             .border_1()
             .border_color(rgb(BORDER));
         let action = match self.method {
-            Method::Browser => return form,
+            Method::Browser => {
+                form = form
+                    .child(
+                        div()
+                            .text_size(px(13.))
+                            .text_color(rgb(TEXT_SOFT))
+                            .child("Opens a browser window to your Odoo sign-in page. BetterOdoo connects automatically once you finish signing in."),
+                    )
+                    .child(help("Supports Odoo passwords, 2FA, Microsoft, and SAML SSO. If your identity provider blocks embedded sign-in (such as Google), use Paste a session cookie instead."));
+                if self.busy {
+                    "Waiting for sign-in…"
+                } else {
+                    "Open browser window"
+                }
+            }
             Method::Password => {
                 form = form
                     .child(label("Email"))
@@ -355,12 +523,26 @@ impl ConnectView {
             d.child(div().text_size(px(13.)).text_color(rgb(DANGER)).child(e))
         })
         .child(
-            Button::new("submit", if self.busy { "Connecting…" } else { action })
-                .variant(Variant::Primary)
-                .wide()
-                .disabled(self.busy)
-                .on_click(cx.listener(|this, _: &ClickEvent, window, cx| this.submit(window, cx))),
+            Button::new(
+                "submit",
+                if self.busy && self.method != Method::Browser {
+                    "Connecting…"
+                } else {
+                    action
+                },
+            )
+            .variant(Variant::Primary)
+            .wide()
+            .disabled(self.busy)
+            .on_click(cx.listener(|this, _: &ClickEvent, window, cx| this.submit(window, cx))),
         )
+        .when(self.busy && self.method == Method::Browser, |d| {
+            d.child(
+                Button::new("cancel-browser", "Cancel")
+                    .wide()
+                    .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.cancel_browser(cx))),
+            )
+        })
     }
 }
 

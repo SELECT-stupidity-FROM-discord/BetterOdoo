@@ -189,14 +189,15 @@ impl SubtaskList {
 impl Render for SubtaskList {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let subs = self.store.read(cx).children_of(self.task);
+        let editor_open = self.entries.read(cx).is_open();
         div()
             .flex()
             .flex_col()
             .gap(px(12.))
-            .child(GhostInput::new(&self.quick, "plus"))
-            .when(self.entries.read(cx).is_open(), |d| {
-                d.child(self.entries.clone())
+            .when(!editor_open, |d| {
+                d.child(GhostInput::new(&self.quick, "plus"))
             })
+            .when(editor_open, |d| d.child(self.entries.clone()))
             .child(
                 div().flex().flex_col().children(
                     subs.iter()

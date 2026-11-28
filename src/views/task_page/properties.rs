@@ -1,5 +1,7 @@
 use super::ChildEvent;
-use crate::components::{Avatar, Floating, MenuHeader, Property, icon, tag};
+use crate::components::{
+    Avatar, DatePicker, DatePickerEvent, Floating, MenuHeader, Property, icon, tag,
+};
 use crate::date;
 use crate::format::{hours, person_tone};
 use crate::input::{InputEvent, TextInput};
@@ -49,7 +51,7 @@ pub struct Properties {
     task: i64,
     open: Option<Field>,
     query: Entity<TextInput>,
-    day: Entity<TextInput>,
+    day: Entity<DatePicker>,
     options: Vec<(i64, String)>,
     loading: bool,
     token: u64,
@@ -65,10 +67,23 @@ impl Properties {
         cx: &mut Context<Self>,
     ) -> Self {
         cx.observe(&store, |_, _, cx| cx.notify()).detach();
+        let today = store.read(cx).today;
         let query = cx.new(|cx| TextInput::new("Search…", cx));
-        let day = cx.new(|cx| TextInput::new("YYYY-MM-DD", cx));
+        let root_for_cal = root.clone();
+        let day = cx.new(|cx| {
+            DatePicker::new(
+                "prop-deadline",
+                "Deadline",
+                "Empty",
+                today,
+                root_for_cal,
+                window,
+                cx,
+            )
+            .headless()
+        });
         cx.subscribe_in(&query, window, Self::on_query).detach();
-        cx.subscribe_in(&day, window, Self::on_day).detach();
+        cx.subscribe_in(&day, window, Self::on_day_picked).detach();
         Self {
             store,
             root,
@@ -85,10 +100,16 @@ impl Properties {
     pub fn set_task(&mut self, id: i64, cx: &mut Context<Self>) {
         self.task = id;
         self.open = None;
+        self.day.update(cx, |d, cx| {
+            d.dismiss(cx);
+        });
         cx.notify();
     }
 
     fn close(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.day.update(cx, |d, cx| {
+            d.dismiss(cx);
+        });
         if self.open.take().is_some() {
             window.focus(&self.root, cx);
             cx.notify();
@@ -99,17 +120,22 @@ impl Properties {
         if self.open == Some(field) {
             return self.close(window, cx);
         }
+        self.day.update(cx, |d, cx| {
+            d.dismiss(cx);
+        });
         self.open = Some(field);
         self.options.clear();
         self.query.update(cx, |q, cx| q.set_text("", cx));
-        self.day.update(cx, |d, cx| d.set_text("", cx));
-        let target = if field == Field::Deadline {
-            &self.day
+        if field == Field::Deadline {
+            let today = self.store.read(cx).today;
+            let current = self
+                .task(cx)
+                .and_then(|t| t.deadline)
+                .and_then(|d| d.get(..10).map(String::from));
+            self.day
+                .update(cx, |d, cx| d.open_popover(current, today, window, cx));
         } else {
-            &self.query
-        };
-        window.focus(&target.focus_handle(cx), cx);
-        if field != Field::Deadline {
+            window.focus(&self.query.focus_handle(cx), cx);
             self.search(cx);
         }
         cx.notify();
@@ -164,24 +190,16 @@ impl Properties {
         }
     }
 
-    fn on_day(
+    fn on_day_picked(
         &mut self,
-        _: &Entity<TextInput>,
-        ev: &InputEvent,
+        _: &Entity<DatePicker>,
+        ev: &DatePickerEvent,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         match ev {
-            InputEvent::Changed => {}
-            InputEvent::Cancel => self.close(window, cx),
-            InputEvent::Submit => {
-                let day = self.day.read(cx).text().trim().to_string();
-                if date::is_valid(&day) {
-                    self.set_deadline(Some(day), window, cx);
-                } else {
-                    cx.emit(ChildEvent::Notice("Write the date as YYYY-MM-DD".into()));
-                }
-            }
+            DatePickerEvent::Changed(day) => self.set_deadline(day.clone(), window, cx),
+            DatePickerEvent::Closed => self.close(window, cx),
         }
     }
 
@@ -450,10 +468,12 @@ impl Properties {
                     let on = self.selected(field, id, t);
                     div()
                         .id(("option", i))
+                        .flex_none()
                         .flex()
                         .items_center()
                         .gap(px(8.))
-                        .h(px(32.))
+                        .min_h(px(36.))
+                        .py(px(6.))
                         .px(px(10.))
                         .rounded(px(6.))
                         .cursor_pointer()
@@ -474,56 +494,6 @@ impl Properties {
         )
     }
 
-    fn date_picker(&self, t: &Task, cx: &mut Context<Self>) -> Floating {
-        let today = self.store.read(cx).today;
-        let quick = |id: &'static str, label: &'static str, offset: i64, cx: &mut Context<Self>| {
-            let day = date::iso(today + offset);
-            div()
-                .id(id)
-                .flex()
-                .justify_between()
-                .items_center()
-                .h(px(32.))
-                .px(px(10.))
-                .rounded(px(6.))
-                .cursor_pointer()
-                .text_size(px(13.))
-                .hover(|s| s.bg(rgb(HOVER)))
-                .child(label)
-                .child(
-                    div()
-                        .text_color(rgb(MUTED))
-                        .child(date::due(Some(&day), today + offset - 2).label),
-                )
-                .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| {
-                    this.set_deadline(Some(day.clone()), window, cx)
-                }))
-        };
-        Floating::new("deadline-picker")
-            .width(280.)
-            .on_dismiss(cx.listener(|this, _: &MouseDownEvent, window, cx| this.close(window, cx)))
-            .child(MenuHeader::new("Deadline").on_clear(
-                t.deadline.is_some(),
-                cx.listener(|this, _: &ClickEvent, window, cx| {
-                    this.clear(Field::Deadline, window, cx)
-                }),
-            ))
-            .child(quick("d-today", "Today", 0, cx))
-            .child(quick("d-tomorrow", "Tomorrow", 1, cx))
-            .child(quick("d-week", "In a week", 7, cx))
-            .child(
-                div()
-                    .mx(px(6.))
-                    .my(px(4.))
-                    .px(px(10.))
-                    .py(px(5.))
-                    .rounded(px(6.))
-                    .border_1()
-                    .border_color(rgb(BORDER))
-                    .child(self.day.clone()),
-            )
-    }
-
     fn row(
         &self,
         field: Field,
@@ -535,9 +505,9 @@ impl Properties {
     ) -> impl IntoElement {
         let popover = (self.open == Some(field)).then(|| {
             if field == Field::Deadline {
-                self.date_picker(t, cx)
+                self.day.clone().into_any_element()
             } else {
-                self.picker(field, t, cx)
+                self.picker(field, t, cx).into_any_element()
             }
         });
         div()

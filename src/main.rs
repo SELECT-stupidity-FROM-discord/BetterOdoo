@@ -1,5 +1,6 @@
 mod ai;
 mod assets;
+mod browser_login;
 mod components;
 mod date;
 mod format;
@@ -25,13 +26,28 @@ use store::Store;
 use theme::*;
 use views::{
     connect::{ConnectView, Connected},
+    employees::{EmployeesEvent, EmployeesView},
     settings::{SettingsEvent, SettingsView},
-    sidebar::{Sidebar, SidebarEvent},
+    sidebar::{Section, Sidebar, SidebarEvent},
     task_list::{ListEvent, TaskList},
     task_page::{PageEvent, TaskPage},
+    timesheets::{TimesheetsEvent, TimesheetsView},
+    titlebar::wrap_window_chrome,
+    todos::{TodosEvent, TodosView},
 };
 
-actions!(better_odoo, [ZoomIn, ZoomOut, ZoomReset]);
+actions!(
+    better_odoo,
+    [
+        ZoomIn,
+        ZoomOut,
+        ZoomReset,
+        HideWindow,
+        MinimizeWindow,
+        ToggleFullscreen,
+        QuitApp
+    ]
+);
 
 fn zoom(next: impl Fn(f32) -> f32, cx: &mut App) {
     let v = scale::set(next(scale::get()));
@@ -69,6 +85,37 @@ fn bind_zoom(cx: &mut App) {
     cx.on_action(|_: &ZoomReset, cx| zoom(|_| 1.0, cx));
 }
 
+fn bind_window_actions(cx: &mut App) {
+    cx.bind_keys([
+        KeyBinding::new("ctrl-h", HideWindow, None),
+        KeyBinding::new("ctrl-m", MinimizeWindow, None),
+        KeyBinding::new("f11", ToggleFullscreen, None),
+        KeyBinding::new("ctrl-q", QuitApp, None),
+    ]);
+    cx.on_action(|_: &HideWindow, cx| {
+        if let Some(win) = cx.active_window() {
+            win.update(cx, |_, window, _| window.minimize_window()).ok();
+        } else {
+            for win in cx.windows() {
+                win.update(cx, |_, window, _| window.minimize_window()).ok();
+            }
+        }
+        cx.hide();
+    });
+    cx.on_action(|_: &MinimizeWindow, cx| {
+        if let Some(win) = cx.active_window() {
+            win.update(cx, |_, window, _| window.minimize_window()).ok();
+        }
+    });
+    cx.on_action(|_: &ToggleFullscreen, cx| {
+        if let Some(win) = cx.active_window() {
+            win.update(cx, |_, window, _| window.toggle_fullscreen())
+                .ok();
+        }
+    });
+    cx.on_action(|_: &QuitApp, cx| cx.quit());
+}
+
 const KEYCHAIN: &str = "BetterOdoo";
 
 struct BetterOdoo {
@@ -76,6 +123,10 @@ struct BetterOdoo {
     store: Entity<Store>,
     list: Entity<TaskList>,
     sidebar: Entity<Sidebar>,
+    section: Section,
+    todos: Option<Entity<TodosView>>,
+    timesheets: Option<Entity<TimesheetsView>>,
+    employees: Option<Entity<EmployeesView>>,
     page: Option<Entity<TaskPage>>,
     settings: Option<Entity<SettingsView>>,
     connect: Option<Entity<ConnectView>>,
@@ -89,11 +140,21 @@ impl BetterOdoo {
         let sidebar = cx.new(|cx| Sidebar::new(store.clone(), list.clone(), cx));
         cx.subscribe_in(&list, window, Self::on_list).detach();
         cx.subscribe_in(&sidebar, window, Self::on_sidebar).detach();
+        if !cfg!(target_os = "macos") {
+            cx.observe_window_activation(window, |_, _, cx| cx.notify())
+                .detach();
+            cx.observe_window_bounds(window, |_, _, cx| cx.notify())
+                .detach();
+        }
         let mut me = Self {
             focus,
             store,
             list,
             sidebar,
+            section: Section::Tasks,
+            todos: None,
+            timesheets: None,
+            employees: None,
             page: None,
             settings: None,
             connect: None,
@@ -164,12 +225,24 @@ impl BetterOdoo {
         cx.delete_credentials(KEYCHAIN).detach();
         self.store.update(cx, |s, cx| s.disconnect(cx));
         self.list.update(cx, |l, _| l.reset());
+        self.todos = None;
+        self.timesheets = None;
+        self.employees = None;
+        self.section = Section::Tasks;
+        self.sidebar
+            .update(cx, |s, cx| s.set_section(Section::Tasks, cx));
         self.page = None;
         self.close_settings(window, cx);
         self.show_connect(None, window, cx);
     }
 
     fn project_label(&self, cx: &App) -> gpui::SharedString {
+        match self.section {
+            Section::Todos => return "To-Dos".into(),
+            Section::Timesheets => return "Timesheets".into(),
+            Section::Employees => return "Employees".into(),
+            _ => {}
+        }
         self.list
             .read(cx)
             .project()
@@ -209,15 +282,15 @@ impl BetterOdoo {
         cx.subscribe_in(&view, window, Self::on_settings).detach();
         self.settings = Some(view);
         self.sidebar
-            .update(cx, |s, cx| s.set_settings_open(true, cx));
+            .update(cx, |s, cx| s.set_section(Section::Settings, cx));
         window.focus(&self.focus, cx);
         cx.notify();
     }
 
     fn close_settings(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.settings.take().is_some() {
-            self.sidebar
-                .update(cx, |s, cx| s.set_settings_open(false, cx));
+            let section = self.section;
+            self.sidebar.update(cx, |s, cx| s.set_section(section, cx));
             window.focus(&self.focus, cx);
             cx.notify();
         }
@@ -225,8 +298,97 @@ impl BetterOdoo {
 
     fn show_list(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.page = None;
+        self.section = Section::Tasks;
+        self.sidebar
+            .update(cx, |s, cx| s.set_section(Section::Tasks, cx));
         self.close_settings(window, cx);
         cx.notify();
+    }
+
+    fn open_todos(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.page = None;
+        self.section = Section::Todos;
+        self.close_settings(window, cx);
+        if self.todos.is_none() {
+            let (store, focus) = (self.store.clone(), self.focus.clone());
+            let view = cx.new(|cx| TodosView::new(store, focus, window, cx));
+            cx.subscribe_in(&view, window, Self::on_todos).detach();
+            self.todos = Some(view);
+        }
+        self.sidebar
+            .update(cx, |s, cx| s.set_section(Section::Todos, cx));
+        self.store.update(cx, |s, cx| s.ensure_todos(cx));
+        window.focus(&self.focus, cx);
+        cx.notify();
+    }
+
+    fn open_timesheets(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.page = None;
+        self.section = Section::Timesheets;
+        self.close_settings(window, cx);
+        if self.timesheets.is_none() {
+            let (store, focus) = (self.store.clone(), self.focus.clone());
+            let view = cx.new(|cx| TimesheetsView::new(store, focus, window, cx));
+            cx.subscribe_in(&view, window, Self::on_timesheets).detach();
+            self.timesheets = Some(view);
+        }
+        self.sidebar
+            .update(cx, |s, cx| s.set_section(Section::Timesheets, cx));
+        self.store.update(cx, |s, cx| s.ensure_timesheets(cx));
+        window.focus(&self.focus, cx);
+        cx.notify();
+    }
+
+    fn open_employees(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.page = None;
+        self.section = Section::Employees;
+        self.close_settings(window, cx);
+        if self.employees.is_none() {
+            let (store, focus) = (self.store.clone(), self.focus.clone());
+            let view = cx.new(|cx| EmployeesView::new(store, focus, window, cx));
+            cx.subscribe_in(&view, window, Self::on_employees).detach();
+            self.employees = Some(view);
+        }
+        self.sidebar
+            .update(cx, |s, cx| s.set_section(Section::Employees, cx));
+        self.store.update(cx, |s, cx| s.ensure_employees(cx));
+        window.focus(&self.focus, cx);
+        cx.notify();
+    }
+
+    fn on_todos(
+        &mut self,
+        _: &Entity<TodosView>,
+        ev: &TodosEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let TodosEvent::OpenTask(id) = ev;
+        self.open_page(*id, window, cx);
+    }
+
+    fn on_timesheets(
+        &mut self,
+        _: &Entity<TimesheetsView>,
+        ev: &TimesheetsEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let TimesheetsEvent::OpenTask(id) = ev;
+        self.open_page(*id, window, cx);
+    }
+
+    fn on_employees(
+        &mut self,
+        _: &Entity<EmployeesView>,
+        ev: &EmployeesEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let EmployeesEvent::FilterTasks(who) = ev;
+        self.list
+            .update(cx, |l, cx| l.set_assignee_filter(Some(who.clone()), cx));
+        self.show_list(window, cx);
     }
 
     fn on_list(
@@ -281,9 +443,37 @@ impl BetterOdoo {
                     .update(cx, |l, cx| l.set_project(Some(name.clone()), cx));
                 self.show_list(window, cx);
             }
+            SidebarEvent::Todos => self.open_todos(window, cx),
+            SidebarEvent::Timesheets => self.open_timesheets(window, cx),
+            SidebarEvent::Employees => self.open_employees(window, cx),
             SidebarEvent::Search => {
-                self.show_list(window, cx);
-                self.list.update(cx, |l, cx| l.focus_filter(window, cx));
+                if self.page.is_none() {
+                    self.close_settings(window, cx);
+                    match self.section {
+                        Section::Todos => {
+                            if let Some(v) = &self.todos {
+                                v.update(cx, |v, cx| v.focus_filter(window, cx));
+                            }
+                        }
+                        Section::Timesheets => {
+                            if let Some(v) = &self.timesheets {
+                                v.update(cx, |v, cx| v.focus_filter(window, cx));
+                            }
+                        }
+                        Section::Employees => {
+                            if let Some(v) = &self.employees {
+                                v.update(cx, |v, cx| v.focus_filter(window, cx));
+                            }
+                        }
+                        _ => {
+                            self.show_list(window, cx);
+                            self.list.update(cx, |l, cx| l.focus_filter(window, cx));
+                        }
+                    }
+                } else {
+                    self.show_list(window, cx);
+                    self.list.update(cx, |l, cx| l.focus_filter(window, cx));
+                }
             }
             SidebarEvent::Settings if self.settings.is_some() => self.close_settings(window, cx),
             SidebarEvent::Settings => self.open_settings(window, cx),
@@ -307,27 +497,57 @@ impl BetterOdoo {
         }
         if key == "escape"
             && (self.sidebar.update(cx, |s, cx| s.dismiss_shortcuts(cx))
+                || self
+                    .todos
+                    .as_ref()
+                    .is_some_and(|t| t.update(cx, |t, cx| t.dismiss_menu(cx)))
+                || self
+                    .timesheets
+                    .as_ref()
+                    .is_some_and(|t| t.update(cx, |t, cx| t.dismiss_menu(cx)))
+                || self
+                    .employees
+                    .as_ref()
+                    .is_some_and(|e| e.update(cx, |e, cx| e.dismiss_menu(cx)))
                 || self.list.update(cx, |l, cx| l.dismiss_menu(cx)))
         {
             return;
         }
         let Some(page) = self.page.clone() else {
-            if key == "a" {
-                if let Some(id) = self.list.read(cx).selected_id(cx) {
-                    self.open_page(id, window, cx);
-                    if let Some(page) = self.page.clone() {
-                        page.update(cx, |p, cx| p.handle_key(ev, window, cx));
+            match self.section {
+                Section::Todos => {
+                    if let Some(v) = &self.todos {
+                        v.update(cx, |v, cx| v.handle_key(ev, window, cx));
                     }
                 }
-            } else {
-                self.list.update(cx, |l, cx| l.handle_key(ev, window, cx));
+                Section::Timesheets => {
+                    if let Some(v) = &self.timesheets {
+                        v.update(cx, |v, cx| v.handle_key(ev, window, cx));
+                    }
+                }
+                Section::Employees => {
+                    if let Some(v) = &self.employees {
+                        v.update(cx, |v, cx| v.handle_key(ev, window, cx));
+                    }
+                }
+                _ if key == "a" => {
+                    if let Some(id) = self.list.read(cx).selected_id(cx) {
+                        self.open_page(id, window, cx);
+                        if let Some(page) = self.page.clone() {
+                            page.update(cx, |p, cx| p.handle_key(ev, window, cx));
+                        }
+                    }
+                }
+                _ => {
+                    self.list.update(cx, |l, cx| l.handle_key(ev, window, cx));
+                }
             }
             return;
         };
         if page.update(cx, |p, cx| p.handle_key(ev, window, cx)) {
             return;
         }
-        if matches!(key, "j" | "k" | "up" | "down") {
+        if self.section == Section::Tasks && matches!(key, "j" | "k" | "up" | "down") {
             self.list.update(cx, |l, cx| l.handle_key(ev, window, cx));
             if let Some(id) = self.list.read(cx).selected_id(cx) {
                 self.open_page(id, window, cx);
@@ -337,26 +557,45 @@ impl BetterOdoo {
 }
 
 impl Render for BetterOdoo {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let base = div()
             .size_full()
             .text_color(rgb(TEXT))
             .font_family(FONT)
             .text_size(px(14.));
         if let Some(connect) = &self.connect {
-            return base.child(connect.clone());
+            let body = base.child(connect.clone()).into_any_element();
+            return wrap_window_chrome(None, body, window);
         }
+        let workspace = self.store.read(cx).workspace.clone();
         let content = match (&self.settings, &self.page) {
             (Some(s), _) => s.clone().into_any_element(),
             (None, Some(p)) => p.clone().into_any_element(),
-            (None, None) => self.list.clone().into_any_element(),
+            (None, None) => match self.section {
+                Section::Todos => self
+                    .todos
+                    .clone()
+                    .map_or_else(|| self.list.clone().into_any_element(), IntoElement::into_any_element),
+                Section::Timesheets => self
+                    .timesheets
+                    .clone()
+                    .map_or_else(|| self.list.clone().into_any_element(), IntoElement::into_any_element),
+                Section::Employees => self
+                    .employees
+                    .clone()
+                    .map_or_else(|| self.list.clone().into_any_element(), IntoElement::into_any_element),
+                _ => self.list.clone().into_any_element(),
+            },
         };
-        base.track_focus(&self.focus)
+        let body = base
+            .track_focus(&self.focus)
             .on_key_down(cx.listener(Self::on_key))
             .flex()
             .bg(rgb(PAGE))
             .child(self.sidebar.clone())
             .child(content)
+            .into_any_element();
+        wrap_window_chrome(Some(workspace), body, window)
     }
 }
 
@@ -367,24 +606,34 @@ fn main() {
             assets::load_fonts(cx).expect("bundled fonts load");
             input::bind_keys(cx);
             bind_zoom(cx);
+            if !cfg!(target_os = "macos") {
+                bind_window_actions(cx);
+                cx.on_window_closed(|cx, _| {
+                    if cx.windows().is_empty() {
+                        cx.quit();
+                    }
+                })
+                .detach();
+            }
             scale::set(settings::zoom().unwrap_or(1.0));
             let bounds = Bounds::centered(None, size(px(1440.), px(900.)), cx);
-            cx.open_window(
-                WindowOptions {
-                    window_bounds: Some(WindowBounds::Windowed(bounds)),
-                    titlebar: Some(TitlebarOptions {
-                        title: Some("BetterOdoo".into()),
-                        ..Default::default()
-                    }),
+            let custom_chrome = !cfg!(target_os = "macos");
+            let window_options = WindowOptions {
+                window_bounds: Some(WindowBounds::Windowed(bounds)),
+                titlebar: Some(TitlebarOptions {
+                    title: Some("BetterOdoo".into()),
+                    appears_transparent: custom_chrome,
                     ..Default::default()
-                },
-                |window, cx| {
-                    let view = cx.new(|cx| BetterOdoo::new(window, cx));
-                    let focus = view.read(cx).focus.clone();
-                    window.focus(&focus, cx);
-                    view
-                },
-            )
+                }),
+                window_decorations: custom_chrome.then_some(gpui::WindowDecorations::Client),
+                ..Default::default()
+            };
+            cx.open_window(window_options, |window, cx| {
+                let view = cx.new(|cx| BetterOdoo::new(window, cx));
+                let focus = view.read(cx).focus.clone();
+                window.focus(&focus, cx);
+                view
+            })
             .unwrap();
             cx.activate(true);
         });

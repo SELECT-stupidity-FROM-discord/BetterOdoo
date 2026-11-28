@@ -1,5 +1,6 @@
 mod basics;
 mod button;
+mod calendar;
 mod check;
 mod chip;
 mod field;
@@ -13,6 +14,7 @@ mod tabs;
 
 pub use basics::{OnClick, OnPress, icon, kbd, popover, tag};
 pub use button::{Button, Variant};
+pub use calendar::{DatePicker, DatePickerEvent};
 pub use check::{Checkbox, Radio};
 pub use chip::Chip;
 pub use field::Field;

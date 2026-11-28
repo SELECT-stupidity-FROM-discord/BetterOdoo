@@ -1,8 +1,8 @@
 use crate::scale::px;
 use crate::theme::*;
 use gpui::{
-    AnyElement, App, FontWeight, IntoElement, ParentElement, RenderOnce, SharedString, Window, div,
-    prelude::*, rgb,
+    AnyElement, App, BoxShadow, FontWeight, IntoElement, ParentElement, RenderOnce, SharedString,
+    Window, black, div, point, prelude::*, rgb,
 };
 
 use super::icon;
@@ -16,6 +16,8 @@ pub enum Tint {
 #[derive(IntoElement)]
 pub struct Card {
     title: SharedString,
+    badge: Option<SharedString>,
+    trailing: Option<AnyElement>,
     tint: Tint,
     error: Option<SharedString>,
     children: Vec<AnyElement>,
@@ -25,10 +27,22 @@ impl Card {
     pub fn new(title: impl Into<SharedString>) -> Self {
         Self {
             title: title.into(),
+            badge: None,
+            trailing: None,
             tint: Tint::Neutral,
             error: None,
             children: Vec::new(),
         }
+    }
+
+    pub fn badge(mut self, badge: impl Into<SharedString>) -> Self {
+        self.badge = Some(badge.into());
+        self
+    }
+
+    pub fn trailing(mut self, el: impl IntoElement) -> Self {
+        self.trailing = Some(el.into_any_element());
+        self
     }
 
     pub fn tint(mut self, tint: Tint) -> Self {
@@ -51,27 +65,78 @@ impl ParentElement for Card {
 impl RenderOnce for Card {
     fn render(self, _: &mut Window, _: &mut App) -> impl IntoElement {
         let ai = self.tint == Tint::Ai;
-        let fg = if ai { PURPLE.fg } else { TEXT_SOFT };
+        let fg = if ai { PURPLE.fg } else { TEXT };
+        let shadow = |alpha: f32, y: f32, blur: f32, spread: f32| BoxShadow {
+            color: black().opacity(alpha),
+            offset: point(px(0.), px(y)),
+            blur_radius: px(blur),
+            spread_radius: px(spread),
+            inset: false,
+        };
         div()
             .flex()
             .flex_col()
-            .gap(px(10.))
-            .p(px(14.))
-            .rounded(px(8.))
-            .bg(rgb(if ai { PURPLE.bg } else { SIDEBAR }))
+            .gap(px(14.))
+            .p(px(18.))
+            .rounded(px(12.))
+            .border_1()
+            .border_color(rgb(if ai { AI_BORDER } else { BORDER }))
+            .bg(rgb(if ai { PURPLE.bg } else { PAGE }))
+            .shadow(vec![
+                shadow(0.03, 1., 3., 0.),
+                shadow(0.04, 6., 16., -4.),
+            ])
             .child(
                 div()
                     .flex()
                     .items_center()
-                    .gap(px(6.))
-                    .text_size(px(12.))
-                    .font_weight(FontWeight::MEDIUM)
-                    .text_color(rgb(fg))
-                    .when(ai, |d| d.child(icon("sparkle", 13., fg)))
-                    .child(self.title),
+                    .justify_between()
+                    .gap(px(10.))
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap(px(8.))
+                            .min_w_0()
+                            .when(ai, |d| d.child(icon("sparkle", 14., PURPLE.fg)))
+                            .child(
+                                div()
+                                    .text_size(px(14.))
+                                    .font_weight(FontWeight::SEMIBOLD)
+                                    .text_color(rgb(fg))
+                                    .child(self.title),
+                            )
+                            .when_some(self.badge, |d, badge| {
+                                d.child(
+                                    div()
+                                        .flex_none()
+                                        .px(px(8.))
+                                        .py(px(2.))
+                                        .rounded_full()
+                                        .bg(rgb(if ai { PAGE } else { SIDEBAR }))
+                                        .border_1()
+                                        .border_color(rgb(if ai { AI_BORDER } else { BORDER }))
+                                        .text_size(px(11.))
+                                        .font_weight(FontWeight::MEDIUM)
+                                        .text_color(rgb(if ai { PURPLE.fg } else { MUTED }))
+                                        .child(badge),
+                                )
+                            }),
+                    )
+                    .children(self.trailing),
             )
             .when_some(self.error, |d, e| {
-                d.child(div().text_size(px(13.)).text_color(rgb(DANGER)).child(e))
+                d.child(
+                    div()
+                        .px(px(12.))
+                        .py(px(8.))
+                        .rounded(px(8.))
+                        .bg(rgb(STAGE_RED.bg))
+                        .text_size(px(12.))
+                        .font_weight(FontWeight::MEDIUM)
+                        .text_color(rgb(DANGER))
+                        .child(e),
+                )
             })
             .children(self.children)
     }

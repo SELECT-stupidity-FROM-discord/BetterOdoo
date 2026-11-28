@@ -23,12 +23,19 @@ const ICONS: &[(&str, &[u8])] = icons!(
     "keyboard",
     "filter",
     "cog",
+    "chevron-left",
     "chevron-right",
     "chevron-down",
     "plus",
     "grip",
     "attach",
-    "tag"
+    "tag",
+    "todo",
+    "users",
+    "window-minimize",
+    "window-maximize",
+    "window-restore",
+    "window-close"
 );
 
 pub struct Assets;

@@ -1,12 +1,14 @@
-use crate::components::{Button, Card, Field, Panel, Radio, Section, Tint, Variant, icon, tag};
+use crate::components::{
+    Avatar, Button, Card, Field, Panel, Radio, Section, Tint, Variant, icon, tag,
+};
 use crate::input::{InputEvent, TextInput};
 use crate::ollama::{self, Model};
 use crate::scale::px;
 use crate::settings;
 use crate::theme::*;
 use gpui::{
-    ClickEvent, Context, Entity, EventEmitter, FontWeight, SharedString, Window, div, prelude::*,
-    rgb,
+    ClickEvent, Context, Entity, EventEmitter, FontWeight, PathPromptOptions, SharedString, Window,
+    div, prelude::*, rgb,
 };
 use std::{
     sync::{Arc, Mutex},
@@ -51,6 +53,7 @@ pub struct SettingsView {
     custom: Entity<TextInput>,
     pulling: Option<(String, String, f32)>,
     notice: Option<(SharedString, bool)>,
+    profile_notice: Option<(SharedString, bool)>,
 }
 
 impl EventEmitter<SettingsEvent> for SettingsView {}
@@ -72,9 +75,161 @@ impl SettingsView {
             custom,
             pulling: None,
             notice: None,
+            profile_notice: None,
         };
         view.refresh(cx);
         view
+    }
+
+    fn pick_avatar(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let prompt = cx.prompt_for_paths(PathPromptOptions {
+            files: true,
+            directories: false,
+            multiple: false,
+            prompt: Some("Choose a local profile photo".into()),
+        });
+        cx.spawn_in(window, async move |this, cx| {
+            let Ok(Ok(Some(paths))) = prompt.await else {
+                return;
+            };
+            let Some(path) = paths.into_iter().next() else {
+                return;
+            };
+            let res = cx
+                .background_executor()
+                .spawn(async move { settings::set_profile_avatar(&path) })
+                .await;
+            this.update_in(cx, |this, window, cx| {
+                match res {
+                    Ok(()) => {
+                        this.profile_notice = Some(("Local profile photo updated.".into(), false));
+                        window.refresh();
+                    }
+                    Err(e) => {
+                        this.profile_notice = Some((e.into(), true));
+                    }
+                }
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    fn clear_avatar(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        settings::clear_profile_avatar();
+        self.profile_notice = Some(("Reverted to the default M symbol.".into(), false));
+        window.refresh();
+        cx.notify();
+    }
+
+    fn profile(&self, cx: &mut Context<Self>) -> Panel {
+        let has_photo = settings::profile_avatar().is_some();
+        Panel::new()
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(px(16.))
+                    .px(px(18.))
+                    .py(px(16.))
+                    .child(
+                        div()
+                            .id("avatar-preview")
+                            .flex_none()
+                            .p(px(2.))
+                            .rounded_full()
+                            .border_1()
+                            .border_color(rgb(BORDER))
+                            .cursor_pointer()
+                            .hover(|s| s.border_color(rgb(ACCENT)))
+                            .child(Avatar::new("Me", BLUE).size(56.))
+                            .on_click(cx.listener(|this, _: &ClickEvent, window, cx| {
+                                this.pick_avatar(window, cx)
+                            })),
+                    )
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .flex()
+                            .flex_col()
+                            .gap(px(3.))
+                            .child(
+                                div()
+                                    .flex()
+                                    .items_center()
+                                    .gap(px(8.))
+                                    .child(
+                                        div()
+                                            .font_weight(FontWeight::SEMIBOLD)
+                                            .text_color(rgb(TEXT))
+                                            .child("Local profile photo"),
+                                    )
+                                    .child(tag("Local only", GRAY, 11.)),
+                            )
+                            .child(
+                                div()
+                                    .text_size(px(12.))
+                                    .text_color(rgb(MUTED))
+                                    .child(if has_photo {
+                                        "Displayed instead of M wherever you appear. Stored only on this device."
+                                    } else {
+                                        "Upload a PNG, JPG, WebP, or GIF to replace the generic M symbol. Never sent to Odoo."
+                                    }),
+                            ),
+                    )
+                    .child(
+                        div()
+                            .flex_none()
+                            .flex()
+                            .items_center()
+                            .gap(px(8.))
+                            .when(has_photo, |d| {
+                                d.child(
+                                    Button::new("avatar-remove", "Remove")
+                                        .variant(Variant::Danger)
+                                        .on_click(cx.listener(
+                                            |this, _: &ClickEvent, window, cx| {
+                                                this.clear_avatar(window, cx)
+                                            },
+                                        )),
+                                )
+                            })
+                            .child(
+                                Button::new(
+                                    "avatar-upload",
+                                    if has_photo {
+                                        "Change photo"
+                                    } else {
+                                        "Upload photo"
+                                    },
+                                )
+                                .variant(if has_photo {
+                                    Variant::Secondary
+                                } else {
+                                    Variant::Primary
+                                })
+                                .on_click(cx.listener(|this, _: &ClickEvent, window, cx| {
+                                    this.pick_avatar(window, cx)
+                                })),
+                            ),
+                    ),
+            )
+            .when_some(self.profile_notice.clone(), |d, (msg, bad)| {
+                d.child(
+                    div()
+                        .px(px(18.))
+                        .py(px(10.))
+                        .border_t_1()
+                        .border_color(rgb(ROW_RULE))
+                        .bg(rgb(if bad { STAGE_RED.bg } else { SIDEBAR }))
+                        .text_size(px(12.))
+                        .font_weight(FontWeight::MEDIUM)
+                        .text_color(rgb(if bad { DANGER } else { SUCCESS }))
+                        .child(msg),
+                )
+            })
     }
 
     fn on_custom(
@@ -441,6 +596,13 @@ impl Render for SettingsView {
                             .font_weight(FontWeight::BOLD)
                             .line_height(px(40.))
                             .child("Settings"),
+                    )
+                    .child(
+                        Section::new(
+                            "Profile",
+                            "Customize how your avatar appears in this app without changing your Odoo profile.",
+                        )
+                        .child(self.profile(cx)),
                     )
                     .child(
                         Section::new("Account", "The Odoo workspace you’re signed in to.")
