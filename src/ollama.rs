@@ -38,6 +38,13 @@ pub fn installed() -> Result<Vec<Model>> {
     Ok(models)
 }
 
+pub fn remove(name: &str) -> Result<()> {
+    ureq::delete(format!("{}/api/delete", root()))
+        .force_send_body()
+        .send_json(json!({"model": name}))?;
+    Ok(())
+}
+
 pub fn pull(name: &str, mut progress: impl FnMut(&str, f32)) -> Result<()> {
     let res = ureq::post(format!("{}/api/pull", root()))
         .send_json(json!({"model": name, "stream": true}))?;

@@ -1,5 +1,5 @@
 use crate::components::{
-    Avatar, Button, Card, Field, Panel, Radio, Section, Tint, Variant, icon, tag,
+    Avatar, Button, Card, Field, Panel, Radio, Section, Tint, Variant, tag,
 };
 use crate::input::{InputEvent, TextInput};
 use crate::ollama::{self, Model};
@@ -52,6 +52,7 @@ pub struct SettingsView {
     active: String,
     custom: Entity<TextInput>,
     pulling: Option<(String, String, f32)>,
+    confirm_remove: Option<String>,
     notice: Option<(SharedString, bool)>,
     profile_notice: Option<(SharedString, bool)>,
 }
@@ -74,6 +75,7 @@ impl SettingsView {
             active: crate::ai::model(),
             custom,
             pulling: None,
+            confirm_remove: None,
             notice: None,
             profile_notice: None,
         };
@@ -275,6 +277,32 @@ impl SettingsView {
         cx.notify();
     }
 
+    fn remove(&mut self, name: String, cx: &mut Context<Self>) {
+        self.confirm_remove = None;
+        let target = name.clone();
+        cx.spawn(async move |this, cx| {
+            let r = cx
+                .background_executor()
+                .spawn(async move { ollama::remove(&target) })
+                .await;
+            this.update(cx, |this, cx| {
+                match r {
+                    Ok(()) => {
+                        this.notice = Some((format!("Removed {name}").into(), false));
+                        this.refresh(cx);
+                    }
+                    Err(e) => {
+                        this.notice = Some((format!("Couldn’t remove {name}: {e}").into(), true))
+                    }
+                }
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+        cx.notify();
+    }
+
     fn download(&mut self, name: String, cx: &mut Context<Self>) {
         if name.is_empty() || self.pulling.is_some() {
             return;
@@ -408,30 +436,58 @@ impl SettingsView {
                 let rows = models.iter().enumerate().map(|(i, m)| {
                     let on = m.name == self.active;
                     let name = m.name.clone();
+                    let sure = self.confirm_remove.as_deref() == Some(m.name.as_str());
+                    let target = m.name.clone();
                     div()
-                        .id(("model", i))
                         .flex()
                         .items_center()
                         .gap(px(12.))
                         .px(px(14.))
-                        .py(px(10.))
-                        .cursor_pointer()
+                        .py(px(6.))
                         .hover(|s| s.bg(rgb(HOVER)))
                         .when(i + 1 < models.len(), |d| {
                             d.border_b_1().border_color(rgb(ROW_RULE))
                         })
-                        .child(Radio::new(on))
-                        .child(div().flex_1().min_w_0().truncate().child(m.name.clone()))
-                        .when(on, |d| d.child(tag("Active", PURPLE, 11.)))
                         .child(
                             div()
-                                .flex_none()
-                                .text_size(px(12.))
-                                .text_color(rgb(MUTED))
-                                .child(ollama::size_label(m.size)),
+                                .id(("model", i))
+                                .flex_1()
+                                .min_w_0()
+                                .flex()
+                                .items_center()
+                                .gap(px(12.))
+                                .py(px(4.))
+                                .cursor_pointer()
+                                .child(Radio::new(on))
+                                .child(div().flex_1().min_w_0().truncate().child(m.name.clone()))
+                                .when(on, |d| d.child(tag("Active", PURPLE, 11.)))
+                                .child(
+                                    div()
+                                        .flex_none()
+                                        .text_size(px(12.))
+                                        .text_color(rgb(MUTED))
+                                        .child(ollama::size_label(m.size)),
+                                )
+                                .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                                    this.choose(&name, cx)
+                                })),
                         )
-                        .on_click(
-                            cx.listener(move |this, _: &ClickEvent, _, cx| this.choose(&name, cx)),
+                        .child(
+                            Button::new(
+                                ("remove", i),
+                                if sure { "Confirm remove" } else { "Remove" },
+                            )
+                            .variant(Variant::Danger)
+                            .on_click(cx.listener(
+                                move |this, _: &ClickEvent, _, cx| {
+                                    if sure {
+                                        this.remove(target.clone(), cx)
+                                    } else {
+                                        this.confirm_remove = Some(target.clone());
+                                        cx.notify()
+                                    }
+                                },
+                            )),
                         )
                 });
                 Panel::new().children(rows.collect::<Vec<_>>())
@@ -445,57 +501,54 @@ impl SettingsView {
             _ => Vec::new(),
         };
         let busy = self.pulling.is_some();
-        let rows = SUGGESTED.iter().enumerate().map(|(i, (name, note))| {
-            let owned = have
-                .iter()
-                .any(|h| h == name || h.strip_suffix(":latest") == Some(name));
-            let progress = self.pulling.as_ref().filter(|(n, _, _)| n == name);
-            let target = name.to_string();
-            let action = match (owned, progress) {
-                (_, Some((_, _, f))) => div()
-                    .text_size(px(12.))
-                    .text_color(rgb(PURPLE.fg))
-                    .child(format!("{}%", (f * 100.) as u32)),
-                (true, _) => div()
+        let rows = SUGGESTED
+            .iter()
+            .enumerate()
+            .filter(|(_, (name, _))| {
+                !have
+                    .iter()
+                    .any(|h| h == name || h.strip_suffix(":latest") == Some(name))
+            })
+            .map(|(i, (name, note))| {
+                let progress = self.pulling.as_ref().filter(|(n, _, _)| n == name);
+                let target = name.to_string();
+                let action = match progress {
+                    Some((_, _, f)) => div()
+                        .text_size(px(12.))
+                        .text_color(rgb(PURPLE.fg))
+                        .child(format!("{}%", (f * 100.) as u32)),
+                    None => {
+                        div().child(Button::new(("get", i), "Download").disabled(busy).on_click(
+                            cx.listener(move |this, _: &ClickEvent, _, cx| {
+                                this.download(target.clone(), cx)
+                            }),
+                        ))
+                    }
+                };
+                div()
                     .flex()
                     .items_center()
-                    .gap(px(4.))
-                    .text_size(px(12.))
-                    .text_color(rgb(SUCCESS))
-                    .child(icon("check", 12., SUCCESS))
-                    .child("Installed"),
-                (false, _) => {
-                    div().child(Button::new(("get", i), "Download").disabled(busy).on_click(
-                        cx.listener(move |this, _: &ClickEvent, _, cx| {
-                            this.download(target.clone(), cx)
-                        }),
-                    ))
-                }
-            };
-            div()
-                .flex()
-                .items_center()
-                .gap(px(12.))
-                .px(px(14.))
-                .py(px(10.))
-                .border_b_1()
-                .border_color(rgb(ROW_RULE))
-                .child(
-                    div()
-                        .flex_1()
-                        .min_w_0()
-                        .flex()
-                        .flex_col()
-                        .child(div().child(name.to_string()))
-                        .child(
-                            div()
-                                .text_size(px(12.))
-                                .text_color(rgb(MUTED))
-                                .child(note.to_string()),
-                        ),
-                )
-                .child(action)
-        });
+                    .gap(px(12.))
+                    .px(px(14.))
+                    .py(px(10.))
+                    .border_b_1()
+                    .border_color(rgb(ROW_RULE))
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .flex()
+                            .flex_col()
+                            .child(div().child(name.to_string()))
+                            .child(
+                                div()
+                                    .text_size(px(12.))
+                                    .text_color(rgb(MUTED))
+                                    .child(note.to_string()),
+                            ),
+                    )
+                    .child(action)
+            });
         Panel::new()
             .children(rows.collect::<Vec<_>>())
             .child(self.custom_row(busy, cx))
