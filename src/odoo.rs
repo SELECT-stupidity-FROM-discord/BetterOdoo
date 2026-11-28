@@ -56,6 +56,19 @@ pub struct WorkItem {
     pub done: bool,
 }
 
+#[derive(Clone, Debug, Default)]
+pub struct NewTaskInput {
+    pub name: String,
+    pub description: Option<String>,
+    pub project_id: Option<i64>,
+    pub stage_id: Option<i64>,
+    pub deadline: Option<String>,
+    pub priority_high: bool,
+    pub user_ids: Vec<i64>,
+    pub tag_ids: Vec<i64>,
+    pub partner_id: Option<i64>,
+}
+
 #[derive(Clone, Debug)]
 pub struct Stage {
     pub id: i64,
@@ -816,21 +829,43 @@ impl Odoo {
         self.write(&[task], json!({"priority": if high { "1" } else { "0" }}))
     }
 
-    pub fn create_todo(
-        &self,
-        name: &str,
-        deadline: Option<&str>,
-        project: Option<i64>,
-    ) -> Result<()> {
+    pub fn create_task(&self, input: &NewTaskInput) -> Result<()> {
+        let assignees = if input.user_ids.is_empty() {
+            vec![self.uid]
+        } else {
+            input.user_ids.clone()
+        };
         let mut vals = json!({
-            "name": name,
-            "user_ids": [[6, 0, [self.uid]]],
+            "name": input.name,
+            "user_ids": [[6, 0, assignees]],
         });
-        if let Some(d) = deadline {
+        if let Some(desc) = input.description.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+            let body = format!(
+                "<p>{}</p>",
+                desc.replace('&', "&amp;")
+                    .replace('<', "&lt;")
+                    .replace('>', "&gt;")
+                    .replace('\n', "<br>")
+            );
+            vals["description"] = json!(body);
+        }
+        if let Some(p) = input.project_id {
+            vals["project_id"] = json!(p);
+        }
+        if let Some(s) = input.stage_id {
+            vals["stage_id"] = json!(s);
+        }
+        if let Some(d) = &input.deadline {
             vals["date_deadline"] = json!(d);
         }
-        if let Some(p) = project {
-            vals["project_id"] = json!(p);
+        if input.priority_high {
+            vals["priority"] = json!("1");
+        }
+        if !input.tag_ids.is_empty() {
+            vals["tag_ids"] = json!([[6, 0, input.tag_ids]]);
+        }
+        if let Some(partner) = input.partner_id {
+            vals["partner_id"] = json!(partner);
         }
         self.call("project.task", "create", json!({"vals_list": [vals]}))?;
         Ok(())

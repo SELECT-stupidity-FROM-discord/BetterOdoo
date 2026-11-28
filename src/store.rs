@@ -1,6 +1,6 @@
 use crate::date;
 use crate::html::{self, Block};
-use crate::odoo::{Employee, Message, Odoo, Stage, Task, Timesheet, WorkItem};
+use crate::odoo::{Employee, Message, NewTaskInput, Odoo, Stage, Task, Timesheet, WorkItem};
 use gpui::{Context, EventEmitter, SharedString};
 use std::{collections::HashMap, sync::Arc};
 
@@ -219,13 +219,29 @@ impl Store {
         project: Option<i64>,
         cx: &mut Context<Self>,
     ) -> gpui::Task<Result<(), SharedString>> {
+        self.create_task(
+            NewTaskInput {
+                name,
+                deadline,
+                project_id: project,
+                ..Default::default()
+            },
+            cx,
+        )
+    }
+
+    pub fn create_task(
+        &mut self,
+        input: NewTaskInput,
+        cx: &mut Context<Self>,
+    ) -> gpui::Task<Result<(), SharedString>> {
         let Some(o) = self.odoo.clone() else {
             return gpui::Task::ready(Err("Not connected".into()));
         };
         cx.spawn(async move |this, cx| {
             let r = cx
                 .background_executor()
-                .spawn(async move { o.create_todo(&name, deadline.as_deref(), project) })
+                .spawn(async move { o.create_task(&input) })
                 .await
                 .map_err(|e| SharedString::from(e.to_string()));
             this.update(cx, |this, cx| {

@@ -593,6 +593,7 @@ impl Render for BetterOdoo {
             },
         };
         let body = base
+            .relative()
             .track_focus(&self.focus)
             .on_key_down(cx.listener(Self::on_key))
             .flex()
