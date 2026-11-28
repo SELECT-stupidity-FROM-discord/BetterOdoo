@@ -1,6 +1,5 @@
-use crate::components::{
-    Avatar, Button, Card, Field, Panel, Radio, Section, Tint, Variant, tag,
-};
+use super::about::About;
+use crate::components::{Avatar, Button, Card, Field, Panel, Radio, Section, Tint, Variant, tag};
 use crate::input::{InputEvent, TextInput};
 use crate::ollama::{self, Model};
 use crate::scale::px;
@@ -55,6 +54,7 @@ pub struct SettingsView {
     confirm_remove: Option<String>,
     notice: Option<(SharedString, bool)>,
     profile_notice: Option<(SharedString, bool)>,
+    about: Entity<About>,
 }
 
 impl EventEmitter<SettingsEvent> for SettingsView {}
@@ -78,6 +78,7 @@ impl SettingsView {
             confirm_remove: None,
             notice: None,
             profile_notice: None,
+            about: cx.new(|_| About::new()),
         };
         view.refresh(cx);
         view
@@ -676,6 +677,10 @@ impl Render for SettingsView {
                         .children(self.progress())
                         .children(notice)
                         .child(self.catalogue(cx)),
+                    )
+                    .child(
+                        Section::new("About", "Version, updates, and source code.")
+                            .child(self.about.clone()),
                     ),
             )
     }

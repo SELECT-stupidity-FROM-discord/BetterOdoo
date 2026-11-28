@@ -35,13 +35,19 @@ const ICONS: &[(&str, &[u8])] = icons!(
     "window-minimize",
     "window-maximize",
     "window-restore",
-    "window-close"
+    "window-close",
+    "github"
 );
+
+const LOGO: &[u8] = include_bytes!("../assets/logo/icon-512.png");
 
 pub struct Assets;
 
 impl AssetSource for Assets {
     fn load(&self, path: &str) -> Result<Option<Cow<'static, [u8]>>> {
+        if path == "logo.png" {
+            return Ok(Some(Cow::Borrowed(LOGO)));
+        }
         let name = path.trim_start_matches("icons/").trim_end_matches(".svg");
         Ok(ICONS
             .iter()

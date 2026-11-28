@@ -19,6 +19,7 @@ mod settings;
 mod store;
 mod theme;
 mod tree;
+mod update;
 mod views;
 
 use gpui::{
