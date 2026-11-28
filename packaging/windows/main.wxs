@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- WiX v3. Build: candle -arch x64 -dVersion=X.Y.Z -dExe=<exe> -dIcon=<ico> main.wxs && light main.wixobj -->
+<Wix xmlns="http://schemas.microsoft.com/wix/2006/wi">
+  <Product Id="*" Name="BetterOdoo" Language="1033" Version="$(var.Version)"
+           Manufacturer="BetterOdoo" UpgradeCode="6F3C1B7E-2A94-4D58-9E0B-7C5D1A8E4F32">
+    <Package InstallerVersion="500" Compressed="yes" InstallScope="perMachine"
+             Description="BetterOdoo, a native Odoo client" />
+    <MajorUpgrade DowngradeErrorMessage="A newer version of [ProductName] is already installed." />
+    <MediaTemplate EmbedCab="yes" />
+
+    <Icon Id="AppIcon.ico" SourceFile="$(var.Icon)" />
+    <Property Id="ARPPRODUCTICON" Value="AppIcon.ico" />
+
+    <Directory Id="TARGETDIR" Name="SourceDir">
+      <Directory Id="ProgramFiles64Folder">
+        <Directory Id="INSTALLFOLDER" Name="BetterOdoo" />
+      </Directory>
+      <Directory Id="ProgramMenuFolder" />
+      <Directory Id="DesktopFolder" />
+    </Directory>
+
+    <DirectoryRef Id="INSTALLFOLDER">
+      <Component Id="MainExecutable" Guid="*">
+        <File Id="BetterOdooExe" Source="$(var.Exe)" KeyPath="yes">
+          <!-- Start menu entry (what Windows search finds) and desktop shortcut. -->
+          <Shortcut Id="StartMenuShortcut" Directory="ProgramMenuFolder" Name="BetterOdoo"
+                    WorkingDirectory="INSTALLFOLDER" Icon="AppIcon.ico" Advertise="yes" />
+          <Shortcut Id="DesktopShortcut" Directory="DesktopFolder" Name="BetterOdoo"
+                    WorkingDirectory="INSTALLFOLDER" Icon="AppIcon.ico" Advertise="yes" />
+        </File>
+      </Component>
+    </DirectoryRef>
+
+    <Feature Id="Main" Title="BetterOdoo" Level="1">
+      <ComponentRef Id="MainExecutable" />
+    </Feature>
+  </Product>
+</Wix>

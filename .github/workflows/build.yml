@@ -46,18 +46,46 @@ jobs:
         shell: bash
         run: cargo build --locked --target ${{ matrix.target }} $([ "$RELEASE" = true ] && echo --release)
 
-      - name: Package
-        if: env.RELEASE == 'true'
+      - name: Package (macOS .dmg)
+        if: env.RELEASE == 'true' && runner.os == 'macOS'
+        shell: bash
+        run: |
+          version=$(grep -m1 '^version' Cargo.toml | cut -d'"' -f2)
+          mkdir dist
+          packaging/macos/build-dmg.sh "target/${{ matrix.target }}/release/better-odoo" "$version" \
+            "dist/better-odoo-${GITHUB_REF_NAME}-${{ matrix.target }}.dmg"
+
+      - name: Package (Windows .msi)
+        if: env.RELEASE == 'true' && runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          choco install wixtoolset -y --no-progress
+          $wix = (Get-ChildItem "${env:ProgramFiles(x86)}\WiX Toolset*\bin" | Select-Object -First 1).FullName
+          $version = (Select-String -Path Cargo.toml -Pattern '^version = "(\d+\.\d+\.\d+)').Matches[0].Groups[1].Value
+          New-Item -ItemType Directory dist | Out-Null
+          & "$wix\candle.exe" -nologo -arch x64 "-dVersion=$version" "-dExe=target\${{ matrix.target }}\release\better-odoo.exe" "-dIcon=assets\logo\icon.ico" -out wix.wixobj packaging\windows\main.wxs
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & "$wix\light.exe" -nologo -out "dist\better-odoo-$env:GITHUB_REF_NAME-${{ matrix.target }}.msi" wix.wixobj
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Package (Linux .tar.gz)
+        if: env.RELEASE == 'true' && runner.os == 'Linux'
         shell: bash
         run: |
           name="better-odoo-${GITHUB_REF_NAME}-${{ matrix.target }}"
-          dir="target/${{ matrix.target }}/release"
-          mkdir dist
-          if [ "$RUNNER_OS" = Windows ]; then
-            7z a "dist/$name.zip" "$dir/better-odoo.exe"
-          else
-            tar -czf "dist/$name.tar.gz" -C "$dir" better-odoo
-          fi
+          mkdir -p "dist/$name"
+          cp "target/${{ matrix.target }}/release/better-odoo" "dist/$name/"
+          cp packaging/linux/better-odoo.desktop "dist/$name/"
+          cp assets/logo/icon-512.png "dist/$name/better-odoo.png"
+          tar -czf "dist/$name.tar.gz" -C dist "$name"
+          rm -rf "dist/$name"
+
+      - name: Package (Linux .AppImage)
+        if: env.RELEASE == 'true' && runner.os == 'Linux'
+        shell: bash
+        run: |
+          packaging/linux/build-appimage.sh "target/${{ matrix.target }}/release/better-odoo" \
+            "dist/better-odoo-${GITHUB_REF_NAME}-${{ matrix.target }}.AppImage"
 
       - uses: actions/upload-artifact@v4
         if: env.RELEASE == 'true'

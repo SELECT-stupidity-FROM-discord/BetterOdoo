@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=BetterOdoo
+Comment=A native Odoo client
+Exec=better-odoo
+Icon=better-odoo
+Categories=Office;ProjectManagement;
+StartupWMClass=better-odoo
+Terminal=false
