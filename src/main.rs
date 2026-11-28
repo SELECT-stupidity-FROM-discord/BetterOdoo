@@ -1,4 +1,10 @@
+#![cfg_attr(
+    all(target_os = "windows", not(debug_assertions)),
+    windows_subsystem = "windows"
+)]
+
 mod ai;
+mod app_icon;
 mod assets;
 mod browser_login;
 mod components;
@@ -611,6 +617,7 @@ fn main() {
         .with_assets(assets::Assets)
         .run(|cx: &mut App| {
             assets::load_fonts(cx).expect("bundled fonts load");
+            app_icon::set();
             input::bind_keys(cx);
             bind_zoom(cx);
             if !cfg!(target_os = "macos") {
@@ -633,6 +640,8 @@ fn main() {
                     ..Default::default()
                 }),
                 window_decorations: custom_chrome.then_some(gpui::WindowDecorations::Client),
+                app_id: Some("better-odoo".into()),
+                icon: app_icon::window(),
                 ..Default::default()
             };
             cx.open_window(window_options, |window, cx| {
