@@ -333,6 +333,28 @@ impl TaskList {
         }
     }
 
+    fn set_all_open(&mut self, open: bool, cx: &mut Context<Self>) {
+        let ids: HashSet<i64> = self.store.read(cx).tasks.iter().map(|t| t.id).collect();
+        let groups: Vec<String> = self
+            .items(cx)
+            .into_iter()
+            .filter_map(|i| match i {
+                ListItem::Group { key, .. } => Some(key),
+                _ => None,
+            })
+            .collect();
+        self.collapsed_groups.clear();
+        if open {
+            self.expanded = ids;
+            self.collapsed.clear();
+        } else {
+            self.expanded.clear();
+            self.collapsed = ids;
+            self.collapsed_groups.extend(groups);
+        }
+        cx.notify();
+    }
+
     fn toggle_group(&mut self, key: &str) {
         if !self.collapsed_groups.remove(key) {
             self.collapsed_groups.insert(key.to_string());
@@ -1134,6 +1156,21 @@ impl TaskList {
             .children(self.active_filter_pills(cx))
     }
 
+    fn fold_link(
+        &self,
+        id: &'static str,
+        label: &'static str,
+        open: bool,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        div()
+            .id(id)
+            .cursor_pointer()
+            .hover(|s| s.text_color(rgb(TEXT)))
+            .child(label)
+            .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| this.set_all_open(open, cx)))
+    }
+
     fn header_row(&self, people: &[String], cx: &mut Context<Self>) -> Div {
         let stage_open = self.stage_menu;
         let people_open = self.people_header_menu;
@@ -1144,7 +1181,17 @@ impl TaskList {
             .pb(px(8.))
             .text_size(px(12.))
             .text_color(rgb(MUTED))
-            .child(div().flex_1().min_w(px(160.)).child("Name"))
+            .child(
+                div()
+                    .flex_1()
+                    .min_w(px(160.))
+                    .flex()
+                    .items_center()
+                    .gap(px(12.))
+                    .child("Name")
+                    .child(self.fold_link("expand-all", "Expand all", true, cx))
+                    .child(self.fold_link("collapse-all", "Collapse all", false, cx)),
+            )
             .child(
                 div()
                     .flex_none()
